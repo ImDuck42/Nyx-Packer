@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 switchToCreate: '#switchToCreate', switchToImport: '#switchToImport', switchToEdit: '#switchToEdit',
                 create: '#createBtn', clear: '#clearBtn', copyKey: '#copyKeyBtn', clearPreview: '#clearPreviewBtn',
                 verifyKey: '#verifyKeyBtn', saveChanges: '#saveChangesBtn', clearEdit: '#clearEditBtn',
-                unlockContent: '#unlockContentBtn',
+                unlockContent: '#unlockContentBtn', configureMetadata: '#configureMetadataBtn',
             },
             inputs: {
                 fileInput: '#fileInput', importInput: '#importInput', editInput: '#editInput', splitSize: '#splitSize',
@@ -58,6 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
         files: [], isProcessing: false, currentImportedShards: [], currentMasterHeader: null,
         activePreviewUrl: null, shardsForEditing: [], isEditorUnlocked: false,
         currentEncryptionKey: null, pendingFileAction: null, isContentUnlocked: false,
+        pendingMetadata: null, isConfiguring: false,
     };
 
     // --- DOM Element Cache ---
@@ -200,7 +201,9 @@ document.addEventListener('DOMContentLoaded', () => {
         /** Updates the state of UI elements in the Create view based on the current app state. */
         updateCreateViewState: () => {
             UI.renderFileList();
-            elements.create.disabled = state.files.length === 0 || state.isProcessing;
+            const hasFiles = state.files.length > 0;
+            elements.create.disabled = !hasFiles || state.isProcessing;
+            elements.configureMetadata.disabled = !hasFiles || state.isProcessing;
             const totalSize = state.files.reduce((sum, f) => sum + f.file.size, 0);
             elements.totalSizeInfo.textContent = totalSize > 0 ? `Total: ${Utils.humanSize(totalSize)}` : '';
             const splitSizeMB = parseFloat(elements.splitSize.value);
@@ -333,7 +336,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 const masterKey = Utils.generateMasterKey();
                 const keyHash = await Utils.computeStringSHA256(masterKey);
                 const entries = Packer.createFileEntries();
-                const baseHeader = { version: CONFIG.CURRENT_VERSION, created: Date.now(), keyHash, files: entries };
+                
+                const metadata = state.pendingMetadata || {};
+                const baseHeader = { 
+                    ...metadata,
+                    version: CONFIG.CURRENT_VERSION, 
+                    created: metadata.created || Date.now(), 
+                    keyHash, 
+                    files: entries 
+                };
+
                 const splitSizeMB = parseFloat(elements.splitSize.value);
                 const splitSizeBytes = !isNaN(splitSizeMB) && splitSizeMB > 0 ? splitSizeMB * 1024 * 1024 : 0;
                 
@@ -366,6 +378,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (e) { UI.showToast(`Package creation failed: ${e.message}`, 'error'); console.error(e); }
             finally {
                 state.isProcessing = false;
+                state.pendingMetadata = null;
                 UI.updateCreateViewState();
                 elements.encryptionPassword.value = '';
                 setTimeout(() => UI.toggleProgress(false), 1000);
@@ -704,6 +717,17 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         /** Handles the 'Save Changes' button click. */
         handleSaveChanges: async () => {
+            if (state.isConfiguring) {
+                try {
+                    state.pendingMetadata = Editor._getNewMetadataFromForm();
+                    UI.showToast('Metadata configured successfully!', 'success');
+                    App.returnToCreateView();
+                } catch (e) {
+                    UI.showToast(e.message, 'error');
+                }
+                return;
+            }
+
             if (!state.isEditorUnlocked) return UI.showToast('Unlock the package with the master key first.', 'warning');
             if (state.isProcessing) return;
 
@@ -810,6 +834,10 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         /** Clears the editor view and resets its state. */
         clear: () => {
+            if (state.isConfiguring) {
+                App.returnToCreateView();
+                return;
+            }
             state.shardsForEditing = []; state.currentMasterHeader = null; state.isEditorUnlocked = false;
             elements.metadata.reset();
             elements.editForm.classList.add(CONFIG.CLASSES.hidden);
@@ -850,6 +878,11 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         /** Switches the visible view. @param {'create'|'import'|'edit'} viewName - The name of the view to switch to. */
         switchToView: (viewName) => {
+            const currentView = document.querySelector('.active-view');
+            if (currentView && currentView.id === 'edit-view' && state.isConfiguring && viewName !== 'edit') {
+                 App.returnToCreateView(false); // don't switch view again
+            }
+
             // Hide all views
             Object.values(CONFIG.SELECTORS.views).forEach(selector => {
                 document.querySelector(selector)?.classList.remove(CONFIG.CLASSES.activeView);
@@ -888,6 +921,7 @@ document.addEventListener('DOMContentLoaded', () => {
         clearFiles: () => {
             if (state.files.length === 0) return;
             state.files = [];
+            state.pendingMetadata = null;
             elements.download.innerHTML = '';
             elements.masterKeyArea.classList.add(CONFIG.CLASSES.hidden);
             UI.showToast('All files cleared', 'success');
@@ -966,6 +1000,42 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } catch (e) { UI.showToast(`${action} failed: ${e.message}`, 'error'); console.error(e); }
         },
+        /** Handles click on the 'Configure Metadata' button */
+        handleConfigureMetadata: () => {
+            if (state.files.length === 0) {
+                UI.showToast('Please add files before configuring metadata.', 'warning');
+                return;
+            }
+            state.isConfiguring = true;
+            const tempHeader = state.pendingMetadata || { created: Date.now() };
+            
+            Editor.displayMetadataForm(tempHeader);
+            
+            // Configure Edit view for metadata entry
+            elements.editZone.parentElement.classList.add(CONFIG.CLASSES.hidden);
+            elements.editKeyVerification.classList.add(CONFIG.CLASSES.hidden);
+            elements.editDownload.classList.add(CONFIG.CLASSES.hidden);
+            elements.editEncryptionSection.classList.add(CONFIG.CLASSES.hidden);
+            elements.editForm.classList.remove(CONFIG.CLASSES.hidden);
+            elements.editForm.dataset.locked = "false";
+            elements.saveChanges.innerHTML = `<span aria-hidden="true">✅</span> Confirm Metadata`;
+            
+            App.switchToView('edit');
+        },
+        /** Resets the edit view from configuration mode and returns to create view */
+        returnToCreateView: (switchView = true) => {
+            state.isConfiguring = false;
+            
+            // Reset Edit view UI
+            elements.editZone.parentElement.classList.remove(CONFIG.CLASSES.hidden);
+            elements.editDownload.classList.remove(CONFIG.CLASSES.hidden);
+            elements.editForm.classList.add(CONFIG.CLASSES.hidden);
+            elements.saveChanges.innerHTML = `<span aria-hidden="true">💾</span> Save Changes`;
+            
+            if (switchView) {
+                App.switchToView('create');
+            }
+        },
         /** Sets up all the application's event listeners. */
         setupEventListeners: () => {
             // View Switching
@@ -986,6 +1056,7 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.clear.addEventListener('click', App.clearFiles);
             elements.copyKey.addEventListener('click', () => { navigator.clipboard.writeText(elements.masterKeyOutput.value); UI.showToast('Master key copied!', 'success'); });
             elements.splitSize.addEventListener('input', UI.updateCreateViewState);
+            elements.configureMetadata.addEventListener('click', App.handleConfigureMetadata);
             elements.fileList.addEventListener('click', (e) => {
                 const button = e.target.closest('button[data-action="remove"]');
                 if (button) {

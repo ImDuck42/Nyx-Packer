@@ -1,34 +1,38 @@
 document.addEventListener('DOMContentLoaded', () => {
 
-    // --- Configuration and Constants ---
+    // =================================================================================
+    // --- CONFIGURATION & CONSTANTS ---
+    // =================================================================================
     const CONFIG = {
-        MAGIC: new TextEncoder().encode('NYXPKG1 '), // 8-byte package identifier
-        CURRENT_VERSION: 4, // Version 4 introduced content encryption
+        CONSTANTS: {
+            MAGIC: new TextEncoder().encode('NYXPKG1 '), // 8-byte package identifier
+            PACKAGE_FORMAT_VERSION: 4,                  // Version of the .nyx file structure
+        },
         SELECTORS: {
-            views: { 
-                createView: '#create-view', 
-                importView: '#import-view', 
-                editView: '#edit-view' 
+            views: {
+                createView: '#create-view',
+                importView: '#import-view',
+                editView: '#edit-view'
             },
             buttons: {
                 switchToCreate: '#switchToCreate', switchToImport: '#switchToImport', switchToEdit: '#switchToEdit',
-                create: '#createBtn', clear: '#clearBtn', copyKey: '#copyKeyBtn', clearPreview: '#clearPreviewBtn',
+                create: '#createBtn', clear: '#clearBtn', copyKey: '#copyKeyBtn',
                 verifyKey: '#verifyKeyBtn', saveChanges: '#saveChangesBtn', clearEdit: '#clearEditBtn',
-                unlockContent: '#unlockContentBtn',
+                unlockContent: '#unlockContentBtn', configureMetadata: '#configureMetadataBtn',
             },
             inputs: {
                 fileInput: '#fileInput', importInput: '#importInput', editInput: '#editInput', splitSize: '#splitSize',
                 masterKey: '#masterKeyInput', encryptionPassword: '#encryptionPassword',
                 importPasswordInput: '#importPasswordInput', editOldPassword: '#editOldPassword', editNewPassword: '#editNewPassword',
             },
-            zones: { 
-                uploadZone: '#uploadZone', importZone: '#importZone', editZone: '#editZone' 
+            zones: {
+                uploadZone: '#uploadZone', importZone: '#importZone', editZone: '#editZone'
             },
             displays: {
                 fileList: '#fileList', shardInfo: '#shardInfo', totalSizeInfo: '#totalSizeInfo',
                 progress: '#createProgress', progressFill: '#progressFill', progressText: '#progressText',
                 masterKeyArea: '#masterKeyArea', masterKeyOutput: '#masterKeyOutput', pkgInfo: '#pkgInfo',
-                previewHeader: '#previewHeader', previewContent: '#previewContent', importPasswordPrompt: '#importPasswordPrompt',
+                importPasswordPrompt: '#importPasswordPrompt',
                 editEncryptionStatus: '#editEncryptionStatus', customDataContent: '#customDataContent',
             },
             containers: {
@@ -43,44 +47,106 @@ document.addEventListener('DOMContentLoaded', () => {
             },
             templates: { fileItem: '#file-item-template' },
         },
-        CLASSES: { hidden: 'hidden', dragover: 'dragover', activeView: 'active-view', activeBtn: 'active' },
+        CLASSES: {
+            hidden: 'hidden',
+            dragover: 'dragover',
+            activeView: 'active-view',
+            activeBtn: 'active',
+        },
         SUPPORTED_PREVIEW_TYPES: {
-            image: ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'],
-            video: ['video/mp4', 'video/webm', 'video/ogg'],
-            audio: ['audio/mp3', 'audio/wav', 'audio/ogg', 'audio/m4a'],
-            text: ['text/plain', 'text/html', 'text/css', 'text/javascript', 'application/json'],
             archive: ['application/zip', 'application/x-zip-compressed'],
-        }
+        },
     };
 
-    // --- Global Application State ---
-    const state = {
-        files: [], isProcessing: false, currentImportedShards: [], currentMasterHeader: null,
-        activePreviewUrl: null, shardsForEditing: [], isEditorUnlocked: false,
-        currentEncryptionKey: null, pendingFileAction: null, isContentUnlocked: false,
-    };
-
-    // --- DOM Element Cache ---
+    // =================================================================================
+    // --- DOM ELEMENT CACHE ---
+    // =================================================================================
     const elements = Object.values(CONFIG.SELECTORS).reduce((acc, group) => {
-        Object.entries(group).forEach(([key, selector]) => { acc[key] = document.querySelector(selector); });
+        for (const [key, selector] of Object.entries(group)) {
+            acc[key] = document.querySelector(selector);
+        }
         return acc;
     }, {});
 
-    // --- Utility Module ---
+
+    // =================================================================================
+    // --- STATE MANAGEMENT ---
+    // =================================================================================
+    const State = (() => {
+        const _state = {
+            files: [],
+            isProcessing: false,
+            currentImportedShards: [],
+            currentMasterHeader: null,
+            activePreviewUrl: null,
+            shardsForEditing: [],
+            isEditorUnlocked: false,
+            currentEncryptionKey: null,
+            pendingFileAction: null,
+            isContentUnlocked: false,
+            pendingMetadata: null,
+            isConfiguring: false,
+        };
+
+        const _self = {
+            getState: () => ({ ..._state }),
+
+            setProcessing: (isProcessing) => {
+                if (typeof isProcessing !== 'boolean') return;
+                _state.isProcessing = isProcessing;
+                UI.updateCreateViewState();
+            },
+
+            setFiles: (files) => {
+                _state.files = files;
+                UI.updateCreateViewState();
+            },
+
+            resetCreateView: () => {
+                _state.files = [];
+                _state.pendingMetadata = null;
+                UI.updateCreateViewState();
+                UI.clearDownloadArea();
+                UI.hideMasterKey();
+            },
+
+            addFiles: (newFileObjects) => {
+                const existingPaths = new Set(_state.files.map(f => f.fullPath));
+                const validFiles = newFileObjects.filter(fObj => {
+                    const alreadyExists = existingPaths.has(fObj.fullPath);
+                    if (alreadyExists) UI.showToast(`File "${fObj.fullPath}" already added`, 'warning');
+                    return !alreadyExists;
+                });
+
+                if (validFiles.length > 0) {
+                    _state.files.push(...validFiles);
+                    UI.showToast(`Added ${validFiles.length} file${validFiles.length === 1 ? '' : 's'}`, 'success');
+                    UI.updateCreateViewState();
+                }
+            },
+
+            // Direct state mutations for properties without side effects
+            mut: (key, value) => {
+                if (key in _state) {
+                    _state[key] = value;
+                }
+            },
+        };
+        return _self;
+    })();
+
+
+    // =================================================================================
+    // --- UTILITY MODULE ---
+    // =================================================================================
     const Utils = {
-        /** Converts bytes to a human-readable string. @param {number} bytes - The number of bytes. @returns {string} */
         humanSize: bytes => {
             if (bytes === 0) return '0 B';
             const units = ['B', 'KB', 'MB', 'GB', 'TB'];
             const i = Math.floor(Math.log(bytes) / Math.log(1024));
             return `${parseFloat((bytes / Math.pow(1024, i)).toFixed(2))} ${units[i]}`;
         },
-        /** Escapes HTML special characters in a string. @param {string} text - The string to escape. @returns {string} */
-        escapeHtml: text => {
-            const str = String(text ?? '');
-            return str.replace(/[&<>"']/g, match => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[match]));
-        },
-        /** Triggers a browser download for a Blob. @param {Blob} blob - The blob to download. @param {string} filename - The desired filename. */
+        escapeHtml: text => String(text ?? '').replace(/[&<>"']/g, match => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[match])),
         downloadBlob: (blob, filename) => {
             const url = URL.createObjectURL(blob);
             const a = Object.assign(document.createElement('a'), { href: url, download: filename });
@@ -88,43 +154,34 @@ document.addEventListener('DOMContentLoaded', () => {
             document.body.removeChild(a);
             setTimeout(() => URL.revokeObjectURL(url), 60000);
         },
-        /** Converts a BigInt to an 8-byte Uint8Array (Big Endian). @param {bigint} n - The BigInt to convert. @returns {Uint8Array} */
         bigIntTo8Bytes: n => {
             const buf = new ArrayBuffer(8);
             new DataView(buf).setBigUint64(0, BigInt(n), false);
             return new Uint8Array(buf);
         },
-        /** Reads an 8-byte Uint8Array into a BigInt (Big Endian). @param {Uint8Array} bytes - The bytes to read. @returns {bigint} */
         readBigInt8Bytes: bytes => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getBigUint64(0, false),
-        /** Computes the SHA-256 hash of a string. @param {string} str - The input string. @returns {Promise<string>} The hex-encoded hash. */
         computeStringSHA256: async str => {
             const buf = new TextEncoder().encode(str);
             const hashBuf = await crypto.subtle.digest('SHA-256', buf);
             return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
         },
-        /** Generates a random alphanumeric master key. @param {number} length - The desired key length. @returns {string} */
         generateMasterKey: (length = 42) => {
             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
             const randomValues = new Uint32Array(length);
             crypto.getRandomValues(randomValues);
             return Array.from(randomValues, val => chars[val % chars.length]).join('');
         },
-        /** Formats a Date object into a string for datetime-local input. @param {Date} date - The date to format. @returns {string} */
         dateToLocalISO: date => {
             const tzoffset = date.getTimezoneOffset() * 60000;
             return new Date(date.getTime() - tzoffset).toISOString().slice(0, 16);
         },
-        /** Censors a filename for display when locked. @param {string} path - The file path. @returns {string} */
-        censorFilename: path => {
-            return path.split('/').map(part => {
-                const lastDot = part.lastIndexOf('.');
-                if (lastDot <= 0) return '*'.repeat(part.length);
-                const name = part.substring(0, lastDot);
-                const ext = part.substring(lastDot);
-                return '*'.repeat(name.length) + ext;
-            }).join('/');
-        },
-        /** Derives a CryptoKey from a password and salt using PBKDF2. @param {string} password - The user's password. @param {Uint8Array} salt - The salt. @returns {Promise<CryptoKey>} */
+        censorFilename: path => path.split('/').map(part => {
+            const lastDot = part.lastIndexOf('.');
+            if (lastDot <= 0) return '*'.repeat(part.length);
+            const name = part.substring(0, lastDot);
+            const ext = part.substring(lastDot);
+            return '*'.repeat(name.length) + ext;
+        }).join('/'),
         deriveKeyFromPassword: async (password, salt) => {
             const enc = new TextEncoder().encode(password);
             const keyMaterial = await crypto.subtle.importKey('raw', enc, { name: 'PBKDF2' }, false, ['deriveKey']);
@@ -133,14 +190,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 keyMaterial, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
             );
         },
-        /** Encrypts a Blob using AES-GCM. @param {Blob} blob - The blob to encrypt. @param {CryptoKey} key - The encryption key. @returns {Promise<{encryptedBlob: Blob, iv: number[]}>} */
         encryptBlob: async (blob, key) => {
             const iv = crypto.getRandomValues(new Uint8Array(12));
             const data = await blob.arrayBuffer();
             const encryptedData = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
             return { encryptedBlob: new Blob([encryptedData]), iv: Array.from(iv) };
         },
-        /** Decrypts a Blob using AES-GCM. @param {Blob} encryptedBlob - The blob to decrypt. @param {CryptoKey} key - The decryption key. @param {number[]} iv - The initialization vector. @returns {Promise<Blob>} */
         decryptBlob: async (encryptedBlob, key, iv) => {
             const data = await encryptedBlob.arrayBuffer();
             const ivBytes = new Uint8Array(iv);
@@ -149,31 +204,32 @@ document.addEventListener('DOMContentLoaded', () => {
         },
     };
 
-    // --- UI Module (Handles all DOM manipulations) ---
+
+    // =================================================================================
+    // --- UI MODULE (Handles all DOM manipulations) ---
+    // =================================================================================
     const UI = {
-        /** Shows a toast notification. @param {string} message - The message to display. @param {'info'|'success'|'error'|'warning'} type - The toast type. @param {number} duration - Duration in ms. */
         showToast: (message, type = 'info', duration = 4000) => {
             if (!elements.toast) return;
             const toast = Object.assign(document.createElement('div'), { className: `toast ${type}`, textContent: message, role: 'status', 'aria-live': 'polite' });
             elements.toast.appendChild(toast);
-            setTimeout(() => toast.remove(), duration);
+            if (duration > 0) setTimeout(() => toast.remove(), duration);
+            return toast;
         },
-        /** Updates the progress bar. @param {number} percent - The percentage (0-100). @param {string} [text] - Optional text to display. */
         updateProgress: (percent, text) => {
             const clampedPercent = Math.max(0, Math.min(100, percent));
             elements.progressFill.style.width = `${clampedPercent}%`;
             elements.progressFill.setAttribute('aria-valuenow', String(clampedPercent));
             if (text) elements.progressText.textContent = text;
         },
-        /** Toggles the visibility of the progress bar. @param {boolean} show - Whether to show the progress bar. @param {string} [text='Preparing...'] - Initial text. */
         toggleProgress: (show, text = 'Preparing...') => {
             elements.progress.classList.toggle(CONFIG.CLASSES.hidden, !show);
             if (show) UI.updateProgress(0, text);
         },
-        /** Gets an appropriate emoji icon for a MIME type. @param {string} mimeType - The file's MIME type. @returns {string} The icon. */
         getFileIcon: mimeType => {
+            const { currentMasterHeader, isContentUnlocked } = State.getState();
             if (!mimeType) return '📄';
-            if (state.currentMasterHeader?.encryption && !state.isContentUnlocked) return '🔒';
+            if (currentMasterHeader?.encryption && !isContentUnlocked) return '🔒';
             if (mimeType.startsWith('image/')) return '🖼️';
             if (mimeType.startsWith('video/')) return '🎬';
             if (mimeType.startsWith('audio/')) return '🎵';
@@ -182,26 +238,32 @@ document.addEventListener('DOMContentLoaded', () => {
             if (CONFIG.SUPPORTED_PREVIEW_TYPES.archive.includes(mimeType)) return '📦';
             return '📄';
         },
-        /** Renders the list of files in the Create view. */
         renderFileList: () => {
+            const { files } = State.getState();
             elements.fileList.innerHTML = '';
             const fragment = document.createDocumentFragment();
-            state.files.forEach((fileObject, index) => {
+            files.forEach((fileObject, index) => {
                 const itemTemplate = elements.fileItem.content.cloneNode(true);
                 const item = itemTemplate.querySelector('.file-item');
                 item.querySelector('.file-icon').textContent = UI.getFileIcon(fileObject.file.type);
                 Object.assign(item.querySelector('.file-name'), { textContent: fileObject.fullPath, title: fileObject.fullPath });
                 item.querySelector('.file-size').textContent = Utils.humanSize(fileObject.file.size);
-                item.querySelector('[data-action="remove"]').dataset.index = String(index);
+                item.querySelectorAll('button').forEach(btn => btn.dataset.index = String(index));
+                
+                const canPreview = Importer.getPreviewerForMime(fileObject.file.type) !== Importer.previewFallback;
+                if (!canPreview) item.querySelector('button[data-action="preview"]')?.classList.add(CONFIG.CLASSES.hidden);
+                
                 fragment.appendChild(itemTemplate);
             });
             elements.fileList.appendChild(fragment);
         },
-        /** Updates the state of UI elements in the Create view based on the current app state. */
         updateCreateViewState: () => {
+            const { files, isProcessing } = State.getState();
             UI.renderFileList();
-            elements.create.disabled = state.files.length === 0 || state.isProcessing;
-            const totalSize = state.files.reduce((sum, f) => sum + f.file.size, 0);
+            const hasFiles = files.length > 0;
+            elements.create.disabled = !hasFiles || isProcessing;
+            elements.configureMetadata.disabled = !hasFiles || isProcessing;
+            const totalSize = files.reduce((sum, f) => sum + f.file.size, 0);
             elements.totalSizeInfo.textContent = totalSize > 0 ? `Total: ${Utils.humanSize(totalSize)}` : '';
             const splitSizeMB = parseFloat(elements.splitSize.value);
             if (!totalSize || isNaN(splitSizeMB) || splitSizeMB <= 0) {
@@ -210,7 +272,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const splitSizeBytes = splitSizeMB * 1024 * 1024;
             elements.shardInfo.textContent = totalSize > splitSizeBytes ? `(≈ ${Math.ceil(totalSize / splitSizeBytes)} shards)` : '';
         },
-        /** Renders download links for generated files. @param {{blob: Blob, filename: string}[]} files - An array of file objects. @param {HTMLElement} targetElement - The container to render into. */
         renderDownloadArea: (files, targetElement) => {
             targetElement.innerHTML = '';
             if (files.length === 0) return;
@@ -229,8 +290,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (files.length > 1) {
                 const button = Object.assign(document.createElement('button'), { className: 'btn btn-primary', innerHTML: `💾 Download All as .zip` });
                 button.onclick = async () => {
-                    if (state.isProcessing) return;
-                    state.isProcessing = true;
+                    if (State.getState().isProcessing) return;
+                    State.setProcessing(true);
                     UI.showToast('Zipping files...', 'info');
                     try {
                         const zip = new JSZip();
@@ -239,48 +300,50 @@ document.addEventListener('DOMContentLoaded', () => {
                         Utils.downloadBlob(zipBlob, `package-shards.zip`);
                         UI.showToast('ZIP archive created!', 'success');
                     } catch (e) { UI.showToast(`Failed to create zip: ${e.message}`, 'error'); console.error(e); }
-                    finally { state.isProcessing = false; }
+                    finally { State.setProcessing(false); }
                 };
                 allContainer.appendChild(button);
             }
             targetElement.appendChild(allContainer);
             targetElement.appendChild(linksContainer);
-        }
+        },
+        showMasterKey: (masterKey) => {
+            elements.masterKeyOutput.value = masterKey;
+            elements.masterKeyArea.classList.remove(CONFIG.CLASSES.hidden);
+        },
+        hideMasterKey: () => elements.masterKeyArea.classList.add(CONFIG.CLASSES.hidden),
+        clearDownloadArea: () => elements.download.innerHTML = '',
     };
 
-    // --- Packer Module (File Creation Logic) ---
+
+    // =================================================================================
+    // --- PACKER MODULE (File Creation Logic) ---
+    // =================================================================================
     const Packer = {
-        /** Assembles a .nyx package Blob from a header and payload. @param {object} headerObj - The JSON header. @param {Blob[]} payloadBlobs - Array of file blobs. @param {string} baseName - Base name for the file. @returns {Promise<{blob: Blob, filename: string}>} */
         buildBlob: async (headerObj, payloadBlobs, baseName) => {
             const headerBytes = new TextEncoder().encode(JSON.stringify(headerObj));
             const headerLenBuf = Utils.bigIntTo8Bytes(headerBytes.length);
-            const blob = new Blob([CONFIG.MAGIC, headerLenBuf, headerBytes, ...payloadBlobs], { type: 'application/octet-stream' });
+            const blob = new Blob([CONFIG.CONSTANTS.MAGIC, headerLenBuf, headerBytes, ...payloadBlobs], { type: 'application/octet-stream' });
             const filename = `${baseName}-${new Date().toISOString().replace(/[:.]/g, '-')}.nyx`;
             return { blob, filename };
         },
-        /** Creates file entry objects for the package header from the current state. @returns {object[]} */
-        createFileEntries: () => state.files.map(({ file, fullPath }) => ({ name: fullPath, mime: file.type || 'application/octet-stream', length: file.size, lastModified: file.lastModified ?? Date.now() })),
-        /** Builds a single or multi-part (sharded) package based on size. @param {object} baseHeader - The base header object. @param {Blob[]} finalPayloads - Array of file content blobs. @param {number} splitSizeBytes - The max size of a shard in bytes, or 0 for no split. @param {HTMLElement} progressElement - The progress container element. @param {HTMLElement} downloadElement - The download container element. */
-        buildFromPayloads: async (baseHeader, finalPayloads, splitSizeBytes, progressElement, downloadElement) => {
+        buildFromPayloads: async (baseHeader, finalPayloads, splitSizeBytes) => {
             const totalPayloadSize = finalPayloads.reduce((sum, blob) => sum + blob.size, 0);
             if (splitSizeBytes > 0 && totalPayloadSize > splitSizeBytes) {
-                await Packer.buildSplitPackage(baseHeader, finalPayloads, splitSizeBytes, progressElement, downloadElement);
-            } else {
-                await Packer.buildSinglePackage(baseHeader, finalPayloads, progressElement, downloadElement);
+                return Packer.buildSplitPackage(baseHeader, finalPayloads, splitSizeBytes);
             }
+            return Packer.buildSinglePackage(baseHeader, finalPayloads);
         },
-        /** Builds a single, non-sharded package. (Called by buildFromPayloads) */
-        buildSinglePackage: async (baseHeader, payloads, progressElement, downloadElement) => {
+        buildSinglePackage: async (baseHeader, payloads) => {
             UI.updateProgress(90, 'Building package header...');
             let offset = 0;
             const finalEntriesWithOffset = baseHeader.files.map(e => ({ ...e, offset: (offset += e.length) - e.length }));
             const headerObj = { ...baseHeader, files: finalEntriesWithOffset, totalSize: offset };
             const builtPackage = await Packer.buildBlob(headerObj, payloads, 'package');
             UI.updateProgress(100, 'Finalizing...');
-            UI.renderDownloadArea([builtPackage], downloadElement);
+            return [builtPackage];
         },
-        /** Builds a sharded package. (Called by buildFromPayloads) */
-        buildSplitPackage: async (baseHeader, payloads, splitSizeBytes, progressElement, downloadElement) => {
+        buildSplitPackage: async (baseHeader, payloads, splitSizeBytes) => {
             const shardData = [];
             const packageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
             let shardNum = 1;
@@ -315,72 +378,57 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             await finalizeCurrentShard();
-            UI.renderDownloadArea(shardData, downloadElement);
             UI.showToast(`Package successfully split into ${shardNum - 1} shards.`, 'success');
+            return shardData;
         },
-        /** Main handler for the 'Create Package' button click. */
-        handleCreate: async () => {
-            if (state.files.length === 0) return UI.showToast('Please add at least one file', 'warning');
-            if (state.isProcessing) return;
+        createPackage: async (files, password, splitSizeMB, metadata) => {
+            const masterKey = Utils.generateMasterKey();
+            const keyHash = await Utils.computeStringSHA256(masterKey);
+            const createFileEntries = () => files.map(({ file, fullPath }) => ({ name: fullPath, mime: file.type || 'application/octet-stream', length: file.size, lastModified: file.lastModified ?? Date.now() }));
+            
+            const baseHeader = { 
+                ...metadata,
+                formatVersion: CONFIG.CONSTANTS.PACKAGE_FORMAT_VERSION, 
+                created: metadata.created || Date.now(), 
+                keyHash, 
+                files: createFileEntries()
+            };
 
-            state.isProcessing = true;
-            UI.updateCreateViewState();
-            elements.download.innerHTML = '';
-            elements.masterKeyArea.classList.add(CONFIG.CLASSES.hidden);
-            UI.toggleProgress(true, 'Preparing package...');
+            const splitSizeBytes = !isNaN(splitSizeMB) && splitSizeMB > 0 ? splitSizeMB * 1024 * 1024 : 0;
+            const finalPayloads = [];
 
-            try {
-                const masterKey = Utils.generateMasterKey();
-                const keyHash = await Utils.computeStringSHA256(masterKey);
-                const entries = Packer.createFileEntries();
-                const baseHeader = { version: CONFIG.CURRENT_VERSION, created: Date.now(), keyHash, files: entries };
-                const splitSizeMB = parseFloat(elements.splitSize.value);
-                const splitSizeBytes = !isNaN(splitSizeMB) && splitSizeMB > 0 ? splitSizeMB * 1024 * 1024 : 0;
-                
-                const finalPayloads = [];
-                const password = elements.encryptionPassword.value;
-                
-                if (password) {
-                    UI.updateProgress(10, "Deriving encryption key...");
-                    const salt = crypto.getRandomValues(new Uint8Array(16));
-                    const encryptionKey = await Utils.deriveKeyFromPassword(password, salt);
-                    baseHeader.encryption = { salt: Array.from(salt) };
+            if (password) {
+                UI.updateProgress(10, "Deriving encryption key...");
+                const salt = crypto.getRandomValues(new Uint8Array(16));
+                const encryptionKey = await Utils.deriveKeyFromPassword(password, salt);
+                baseHeader.encryption = { salt: Array.from(salt) };
 
-                    for (let i = 0; i < state.files.length; i++) {
-                        UI.updateProgress(10 + (i / state.files.length * 70), `Encrypting ${state.files[i].fullPath}...`);
-                        const { encryptedBlob, iv } = await Utils.encryptBlob(state.files[i].file, encryptionKey);
-                        finalPayloads.push(encryptedBlob);
-                        baseHeader.files[i].iv = iv;
-                        baseHeader.files[i].length = encryptedBlob.size;
-                    }
-                } else {
-                    finalPayloads.push(...state.files.map(f => f.file));
+                for (let i = 0; i < files.length; i++) {
+                    UI.updateProgress(10 + (i / files.length * 70), `Encrypting ${files[i].fullPath}...`);
+                    const { encryptedBlob, iv } = await Utils.encryptBlob(files[i].file, encryptionKey);
+                    finalPayloads.push(encryptedBlob);
+                    baseHeader.files[i].iv = iv;
+                    baseHeader.files[i].length = encryptedBlob.size;
                 }
-                
-                await Packer.buildFromPayloads(baseHeader, finalPayloads, splitSizeBytes, elements.progress, elements.download);
-
-                elements.masterKeyOutput.value = masterKey;
-                elements.masterKeyArea.classList.remove(CONFIG.CLASSES.hidden);
-                UI.showToast('Package created successfully!', 'success');
-
-            } catch (e) { UI.showToast(`Package creation failed: ${e.message}`, 'error'); console.error(e); }
-            finally {
-                state.isProcessing = false;
-                UI.updateCreateViewState();
-                elements.encryptionPassword.value = '';
-                setTimeout(() => UI.toggleProgress(false), 1000);
+            } else {
+                finalPayloads.push(...files.map(f => f.file));
             }
+            
+            const packages = await Packer.buildFromPayloads(baseHeader, finalPayloads, splitSizeBytes);
+            return { packages, masterKey };
         },
     };
 
-    // --- Importer Module (File Extraction Logic) ---
+
+    // =================================================================================
+    // --- IMPORTER MODULE (File Extraction Logic) ---
+    // =================================================================================
     const Importer = {
-        /** Reads and parses the header from a .nyx package file. @param {File} packageFile - The .nyx file. @returns {Promise<{header: object, payloadStart: number, packageFile: File}>} */
         readPackageHeader: async (packageFile) => {
             if (!packageFile.name.toLowerCase().endsWith('.nyx')) throw new Error(`Invalid file type: ${packageFile.name}`);
             const headerBuffer = await packageFile.slice(0, 16).arrayBuffer();
             const headerBytes = new Uint8Array(headerBuffer);
-            if (new TextDecoder().decode(headerBytes.slice(0, 8)) !== new TextDecoder().decode(CONFIG.MAGIC)) throw new Error('Invalid package file (bad magic header)');
+            if (new TextDecoder().decode(headerBytes.slice(0, 8)) !== new TextDecoder().decode(CONFIG.CONSTANTS.MAGIC)) throw new Error('Invalid package file (bad magic header)');
             const headerLength = Number(Utils.readBigInt8Bytes(headerBytes.slice(8, 16)));
             const headerEnd = 16 + headerLength;
             const headerJsonBuffer = await packageFile.slice(16, headerEnd).arrayBuffer();
@@ -389,7 +437,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 return { header, payloadStart: headerEnd, packageFile };
             } catch (e) { throw new Error('Invalid package file (corrupted header)'); }
         },
-        /** Processes multiple shard headers to reconstruct a single master header. @param {{header: object}[]} headers - An array of parsed header objects. @returns {{masterHeader: object, sortedShards: object[]}} */
         processHeaders: (headers) => {
             if (headers.length === 0) throw new Error("No valid package shards found.");
             const firstHeader = headers[0].header;
@@ -417,7 +464,6 @@ document.addEventListener('DOMContentLoaded', () => {
             delete masterHeader.splitInfo;
             return { masterHeader, sortedShards };
         },
-        /** Extracts the raw (potentially encrypted) blob for a file entry from its shards. @param {object} fileEntry - The file's master header entry. @param {object[]} sourceShards - The sorted shard objects. @returns {Promise<Blob>} */
         _extractRawFileBlob: async (fileEntry, sourceShards) => {
              if (!fileEntry.chunks || fileEntry.chunks.length === 0) {
                 const shard = sourceShards[0];
@@ -430,14 +476,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }));
             return new Blob(chunkBlobs);
         },
-        /** Extracts and decrypts (if necessary) the blob for a file entry. @param {object} fileEntry - The file's master header entry. @returns {Promise<Blob>} The final file blob. */
         extractFileBlob: async (fileEntry) => {
-            const rawBlob = await Importer._extractRawFileBlob(fileEntry, state.currentImportedShards);
-            if (state.currentMasterHeader.encryption) {
-                if (!state.currentEncryptionKey) throw new Error("Encryption key not available.");
+            const { currentImportedShards, currentMasterHeader, currentEncryptionKey } = State.getState();
+            const rawBlob = await Importer._extractRawFileBlob(fileEntry, currentImportedShards);
+            if (currentMasterHeader.encryption) {
+                if (!currentEncryptionKey) throw new Error("Encryption key not available.");
                 try {
-                    UI.showToast(`Decrypting ${Utils.censorFilename(fileEntry.name)}...`, 'info', 1500);
-                    const decryptedBlob = await Utils.decryptBlob(rawBlob, state.currentEncryptionKey, fileEntry.iv);
+                    UI.showToast(`Decrypting ${fileEntry.name}...`, 'info', 1500);
+                    const decryptedBlob = await Utils.decryptBlob(rawBlob, currentEncryptionKey, fileEntry.iv);
                     return new Blob([await decryptedBlob.arrayBuffer()], { type: fileEntry.mime });
                 } catch (e) {
                     console.error("Decryption failed:", e);
@@ -446,23 +492,41 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             return new Blob([await rawBlob.arrayBuffer()], { type: fileEntry.mime });
         },
-        /** Displays the main package information in the UI. @param {object} header - The master header. @param {number} totalSize - Total size of all shard files. */
         displayPackageInfo: (header, totalSize) => {
+            const { currentImportedShards } = State.getState();
             const details = {
-                'Author': header.author, 'Source': header.source, 'Files': header.files.length, 'Total Size': Utils.humanSize(totalSize),
-                'Created': new Date(header.created || 0).toLocaleString(), 'Package Version': header.version ?? 1,
+                'Author': header.author, 'Files': header.files.length, 'Total Size': Utils.humanSize(totalSize),
+                'Created': new Date(header.created || 0).toLocaleString(),
                 'Encryption': header.encryption ? 'AES-GCM' : 'None',
+                'Content Version': header.version ?? 1,
+                'Package Format Version': header.formatVersion ?? 1,
             };
             const detailsHtml = Object.entries(details).filter(([, v]) => v).map(([k, v]) => `<div><strong>${k}:</strong> ${Utils.escapeHtml(v)}</div>`).join('');
             const descriptionHtml = header.description ? `<p class="package-description">${Utils.escapeHtml(header.description)}</p>` : '';
             const tagsHtml = header.tags?.length ? `<div class="package-tags">${header.tags.map(tag => `<span class="tag">${Utils.escapeHtml(tag)}</span>`).join('')}</div>` : '';
-            const shardInfo = state.currentImportedShards.length > 1 ? `<div><strong>Shards:</strong> ${state.currentImportedShards.length}</div>` : '';
+            const sourcesHtml = header.source ? `
+                <div class="package-sources">
+                    <strong>Source${header.source.includes(',') ? 's' : ''}:</strong>
+                    <ul>
+                        ${header.source.split(',').map(s => s.trim()).filter(Boolean).map(source => {
+                            try {
+                                if (!source.startsWith('http://') && !source.startsWith('https://')) throw new Error('Not a full URL');
+                                const url = new URL(source);
+                                return `<li><a href="${Utils.escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer">${Utils.escapeHtml(source)}</a></li>`;
+                            } catch (_) {
+                                return `<li>${Utils.escapeHtml(source)}</li>`;
+                            }
+                        }).join('')}
+                    </ul>
+                </div>` : '';
+
+            const shardInfo = currentImportedShards.length > 1 ? `<div><strong>Shards:</strong> ${currentImportedShards.length}</div>` : '';
             const customDataButton = header.customData ? `<button class="btn btn-secondary btn-small ${header.encryption ? 'hidden' : ''}" data-action="view-custom-data">View Custom Data</button>` : '';
 
             elements.pkgInfo.innerHTML = `
                 <div class="package-summary">
                     <h3>📦 Package: <span class="pkg-name">${Utils.escapeHtml(header.packageName) || 'Untitled'}</span></h3>
-                    ${descriptionHtml}${tagsHtml}
+                    ${descriptionHtml}${tagsHtml}${sourcesHtml}
                     <div class="package-details-grid">${detailsHtml}${shardInfo}</div>
                     <div class="view-actions">
                         <button class="btn btn-primary" data-action="save-all-zip">💾 Download All as .zip</button>
@@ -470,11 +534,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 </div>`;
             
-            if(header.customData) {
-                elements.customDataContent.textContent = JSON.stringify(header.customData, null, 2);
-            }
+            if(header.customData) elements.customDataContent.textContent = JSON.stringify(header.customData, null, 2);
         },
-        /** Creates and displays the list of file actions (preview, save, etc.). @param {object[]} files - The array of file entries from the header. */
         createFileActionsList: (files) => {
             const listContainer = Object.assign(document.createElement('div'), { className: 'file-list' });
             const rootEntries = new Map();
@@ -496,13 +557,13 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             elements.pkgInfo.appendChild(listContainer);
         },
-        /** Creates a single folder item for the file actions list. @returns {HTMLDivElement} */
         createPackageFolderItem: (folderName, folderFiles) => {
+            const { currentMasterHeader, isContentUnlocked } = State.getState();
             const item = document.createElement('div');
             item.className = 'file-item';
             const totalSize = folderFiles.reduce((sum, f) => sum + f.length, 0);
             const fileNamesJson = Utils.escapeHtml(JSON.stringify(folderFiles.map(f => f.name)));
-            const isLocked = state.currentMasterHeader?.encryption && !state.isContentUnlocked;
+            const isLocked = currentMasterHeader?.encryption && !isContentUnlocked;
             const icon = isLocked ? '🔒' : '📁';
             const displayName = isLocked ? Utils.censorFilename(folderName) : Utils.escapeHtml(folderName);
 
@@ -511,148 +572,91 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div style="display: flex; gap: 5px;"><button class="btn btn-small btn-primary" data-action="save-folder" data-folder-name="${Utils.escapeHtml(folderName)}" data-files-json='${fileNamesJson}'>💾 ZIP</button></div>`;
             return item;
         },
-        /** Creates a single file item for the file actions list. @returns {HTMLDivElement} */
         createPackageFileItem: (fileEntry, index) => {
+            const { currentMasterHeader, isContentUnlocked } = State.getState();
             const item = document.createElement('div');
             item.className = 'file-item';
-            const canPreview = Object.values(CONFIG.SUPPORTED_PREVIEW_TYPES).flat().includes(fileEntry.mime);
-            const isLocked = state.currentMasterHeader?.encryption && !state.isContentUnlocked;
+            const canPreview = Importer.getPreviewerForMime(fileEntry.mime) !== Importer.previewFallback;
+            const isLocked = currentMasterHeader?.encryption && !isContentUnlocked;
             const displayName = isLocked ? Utils.censorFilename(fileEntry.name) : Utils.escapeHtml(fileEntry.name);
             
             item.innerHTML = `<div class="file-icon">${UI.getFileIcon(fileEntry.mime)}</div>
                 <div class="file-meta"><div class="file-name" title="${displayName}">${displayName}</div><div class="file-size">${Utils.humanSize(fileEntry.length)} - <em>${fileEntry.mime || 'unknown'}</em></div></div>
-                <div style="display: flex; gap: 5px;">
+                <div class="file-actions">
                     ${canPreview ? `<button class="btn btn-small btn-secondary" data-action="preview" data-index="${index}">👁️ Preview</button>` : ''}
                     <button class="btn btn-small btn-primary" data-action="save" data-index="${index}">💾 Save</button>
                 </div>`;
             return item;
         },
-        /** Refreshes the file list view, typically after unlocking content. */
         refreshFileListView: () => {
+            const { currentMasterHeader } = State.getState();
             elements.pkgInfo.querySelector('.file-list')?.remove();
-            Importer.createFileActionsList(state.currentMasterHeader.files);
+            Importer.createFileActionsList(currentMasterHeader.files);
         },
-        /** Renders a preview of a file. @param {Blob} blob - The file content blob. @param {object} fileEntry - The file's header entry. */
-        displayPreview: async (blob, fileEntry) => {
-            Importer.clearPreview();
+        displayPreview: async (blob, mimeType, targetFileItem) => {
+            const { activePreviewUrl } = State.getState();
+            if (activePreviewUrl) { URL.revokeObjectURL(activePreviewUrl); State.mut('activePreviewUrl', null); }
+            
+            const container = document.createElement('div');
+            container.className = 'inline-preview-container';
+
+            const closeBtn = Object.assign(document.createElement('button'), {
+                className: 'btn btn-small btn-danger inline-preview-close-btn',
+                innerHTML: `<span aria-hidden="true">✖</span>`, title: 'Close Preview', 'aria-label': 'Close Preview',
+            });
+            closeBtn.onclick = () => container.remove();
+
             const wrapper = Object.assign(document.createElement('div'), { className: 'preview-wrapper' });
-            const previewer = Importer.getPreviewerForMime(fileEntry.mime);
+            container.append(closeBtn, wrapper);
+
+            const previewer = Importer.getPreviewerForMime(mimeType);
             await previewer(blob, wrapper);
-            elements.previewContent.appendChild(wrapper);
-            elements.previewHeader.classList.remove(CONFIG.CLASSES.hidden);
+            
+            targetFileItem.after(container);
         },
-        /** Gets the appropriate preview rendering function for a MIME type. @param {string} mime - The MIME type. @returns {Function} */
         getPreviewerForMime: mime => {
+            if (!mime) return Importer.previewFallback;
             if (CONFIG.SUPPORTED_PREVIEW_TYPES.archive.includes(mime)) return Importer.previewArchive;
             if (mime.startsWith('image/')) return Importer.previewMedia('img');
             if (mime.startsWith('video/')) return Importer.previewMedia('video');
             if (mime.startsWith('audio/')) return Importer.previewMedia('audio');
-            if (CONFIG.SUPPORTED_PREVIEW_TYPES.text.includes(mime)) return Importer.previewText;
+            if (mime.includes('svg')) return Importer.previewMedia('img');
+            if (mime.startsWith('text/') || ['application/json', 'application/xml', 'application/javascript'].includes(mime)) return Importer.previewText;
             return Importer.previewFallback;
         },
-        /** Previews a zip archive by listing its contents. @param {Blob} blob - Zip file blob. @param {HTMLElement} wrapper - The container element. */
         previewArchive: async (blob, wrapper) => {
             try {
                 const zip = await JSZip.loadAsync(blob);
                 wrapper.innerHTML = `<div class="zip-preview-list"><ul>${Object.values(zip.files).map(f => `<li class="${f.dir ? 'is-dir' : ''}">${Utils.escapeHtml(f.name)}</li>`).join('')}</ul></div>`;
             } catch (e) { Importer.previewFallback(blob, wrapper); }
         },
-        /** Previews media (image, video, audio). @param {'img'|'video'|'audio'} type - The type of media element to create. @returns {Function} */
         previewMedia: type => async (blob, wrapper) => {
-            state.activePreviewUrl = URL.createObjectURL(blob);
-            const el = Object.assign(document.createElement(type), { src: state.activePreviewUrl });
+            const url = URL.createObjectURL(blob);
+            State.mut('activePreviewUrl', url);
+            const el = Object.assign(document.createElement(type), { src: url });
             if (type !== 'img') el.controls = true;
             wrapper.appendChild(el);
         },
-        /** Previews a text-based file. @param {Blob} blob - Text file blob. @param {HTMLElement} wrapper - The container element. */
         previewText: async (blob, wrapper) => {
             wrapper.innerHTML = `<pre>${Utils.escapeHtml(await blob.text())}</pre>`;
         },
-        /** Displays a fallback message for unsupported preview types. @param {Blob} blob - The blob. @param {HTMLElement} wrapper - The container element. */
-        previewFallback: (blob, wrapper) => {
+        previewFallback: (_, wrapper) => {
             wrapper.innerHTML = `<p>Preview not available for this file type.</p>`;
-        },
-        /** Clears the current file preview. */
-        clearPreview: () => {
-            if (state.activePreviewUrl) { URL.revokeObjectURL(state.activePreviewUrl); state.activePreviewUrl = null; }
-            elements.previewContent.innerHTML = '';
-            elements.previewHeader.classList.add(CONFIG.CLASSES.hidden);
-        },
-        /** Main handler for importing package files. @param {FileList} packageFiles - Files from an input or drop event. */
-        handleImport: async (packageFiles) => {
-            if (!packageFiles || packageFiles.length === 0) return;
-            elements.pkgInfo.innerHTML = '';
-            elements.importPasswordPrompt.classList.add(CONFIG.CLASSES.hidden);
-            elements.customData.classList.add(CONFIG.CLASSES.hidden);
-            state.currentEncryptionKey = null;
-            state.isContentUnlocked = false;
-            Importer.clearPreview();
-            try {
-                const headers = await Promise.all([...packageFiles].map(Importer.readPackageHeader));
-                const { masterHeader, sortedShards } = Importer.processHeaders(headers);
-                state.currentMasterHeader = masterHeader;
-                state.currentImportedShards = sortedShards;
-                const totalSize = sortedShards.reduce((s, sh) => s + sh.packageFile.size, 0);
-                Importer.displayPackageInfo(masterHeader, totalSize);
-                Importer.createFileActionsList(masterHeader.files);
-
-                if (masterHeader.encryption) {
-                    elements.importPasswordPrompt.classList.remove(CONFIG.CLASSES.hidden);
-                    UI.showToast('Package is encrypted. Enter password to access files.', 'info');
-                }
-
-                UI.showToast(`Package loaded: ${masterHeader.files.length} files`, 'success');
-            } catch (e) { UI.showToast(`Import failed: ${e.message}`, 'error'); console.error(e); }
-        },
-        /** Handles the 'Unlock' button click for encrypted content. */
-        handleUnlockContent: async () => {
-            const password = elements.importPasswordInput.value;
-            if (!password || !state.currentMasterHeader?.encryption) return;
-
-            UI.showToast('Verifying password...', 'info');
-            try {
-                const salt = new Uint8Array(state.currentMasterHeader.encryption.salt);
-                const key = await Utils.deriveKeyFromPassword(password, salt);
-                state.currentEncryptionKey = key;
-                
-                // Test decryption on the first file to validate the password
-                const firstFile = state.currentMasterHeader.files[0];
-                if (firstFile) {
-                    await Importer.extractFileBlob(firstFile);
-                }
-                
-                state.isContentUnlocked = true;
-                UI.showToast('Password correct! Content unlocked.', 'success');
-                Importer.refreshFileListView();
-                elements.importPasswordPrompt.classList.add(CONFIG.CLASSES.hidden);
-                elements.importPasswordInput.value = '';
-
-                elements.pkgInfo.querySelector('[data-action="view-custom-data"]')?.classList.remove(CONFIG.CLASSES.hidden);
-
-                if (state.pendingFileAction) {
-                    App.handleFileAction(state.pendingFileAction.event, true);
-                    state.pendingFileAction = null;
-                }
-            } catch (e) {
-                state.currentEncryptionKey = null;
-                state.isContentUnlocked = false;
-                UI.showToast(e.message || 'Incorrect password or corrupted file.', 'error');
-                console.error(e);
-            }
         },
     };
 
-    // --- Editor Module (Metadata Editing Logic) ---
+
+    // =================================================================================
+    // --- EDITOR MODULE (Metadata Editing Logic) ---
+    // =================================================================================
     const Editor = {
-        /** Unlocks the editing form after successful key verification. @param {object} header - The package master header. */
         unlockForm: (header) => {
-            state.isEditorUnlocked = true;
+            State.mut('isEditorUnlocked', true);
             elements.editKeyVerification.classList.add(CONFIG.CLASSES.hidden);
             elements.editForm.dataset.locked = "false";
             elements.masterKey.value = '';
             Editor.displayMetadataForm(header);
         },
-        /** Populates the metadata form with data from the package header. @param {object} header - The package master header. */
         displayMetadataForm: (header) => {
             elements.metadata.reset();
             elements.pkgName.value = header.packageName ?? '';
@@ -675,59 +679,21 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.editOldPassword.value = '';
             elements.editNewPassword.value = '';
         },
-        /** Main handler for loading a package into the editor view. @param {FileList} packageFiles - The package files. */
-        handleLoad: async (packageFiles) => {
-            if (!packageFiles || packageFiles.length === 0) return;
-            Editor.clear();
-            try {
-                const loadedShards = await Promise.all([...packageFiles].map(Importer.readPackageHeader));
-                const { masterHeader, sortedShards } = Importer.processHeaders(loadedShards);
-                state.shardsForEditing = sortedShards;
-                state.currentMasterHeader = masterHeader;
-                elements.editForm.classList.remove(CONFIG.CLASSES.hidden);
-                if (masterHeader.keyHash) {
-                    elements.editKeyVerification.classList.remove(CONFIG.CLASSES.hidden);
-                    elements.editForm.dataset.locked = "true";
-                    state.isEditorUnlocked = false;
-                } else { Editor.unlockForm(masterHeader); }
-                UI.showToast(`Loaded "${masterHeader.packageName || 'package'}" for editing.`, 'success');
-            } catch (e) { UI.showToast(`Failed to load package: ${e.message}`, 'error'); console.error(e); Editor.clear(); }
-        },
-        /** Handles the 'Verify Key' button click. */
-        handleVerifyKey: async () => {
-            const key = elements.masterKey.value;
-            if (!key || !state.currentMasterHeader?.keyHash) return;
-            if (await Utils.computeStringSHA256(key) === state.currentMasterHeader.keyHash) {
-                UI.showToast('Key correct! Unlocking editor.', 'success');
-                Editor.unlockForm(state.currentMasterHeader);
-            } else { UI.showToast('Incorrect master key.', 'error'); }
-        },
-        /** Handles the 'Save Changes' button click. */
-        handleSaveChanges: async () => {
-            if (!state.isEditorUnlocked) return UI.showToast('Unlock the package with the master key first.', 'warning');
-            if (state.isProcessing) return;
-
-            state.isProcessing = true;
-            UI.toggleProgress(true, 'Preparing to rebuild package...');
-            elements.editDownload.innerHTML = '';
-
-            try {
-                const newGlobalMetadata = Editor._getNewMetadataFromForm();
-                const oldPassword = elements.editOldPassword.value;
-                const newPassword = elements.editNewPassword.value;
-                
-                if (oldPassword || newPassword) {
-                    await Editor._rebuildPackageWithEncryptionChanges(newGlobalMetadata, oldPassword, newPassword);
-                } else {
-                    await Editor._updatePackageMetadataOnly(newGlobalMetadata);
-                }
-            } catch (e) { UI.showToast(`Error saving package: ${e.message}`, 'error'); console.error(e); }
-            finally { 
-                state.isProcessing = false; 
-                setTimeout(() => UI.toggleProgress(false), 1500);
+        clear: () => {
+            if (State.getState().isConfiguring) {
+                App.returnToCreateView();
+                return;
             }
+            State.mut('shardsForEditing', []);
+            State.mut('currentMasterHeader', null);
+            State.mut('isEditorUnlocked', false);
+            elements.metadata.reset();
+            elements.editForm.classList.add(CONFIG.CLASSES.hidden);
+            elements.editKeyVerification.classList.add(CONFIG.CLASSES.hidden);
+            elements.editDownload.innerHTML = '';
+            if (elements.editInput) elements.editInput.value = '';
+            UI.showToast('Editor cleared.', 'info');
         },
-        /** Helper to gather metadata from the edit form. @returns {object} */
         _getNewMetadataFromForm: () => {
             let customData = null;
             if (elements.pkgCustomData.value.trim()) {
@@ -737,35 +703,32 @@ document.addEventListener('DOMContentLoaded', () => {
             return {
                 packageName: elements.pkgName.value.trim(), author: elements.pkgAuthor.value.trim(), description: elements.pkgDescription.value.trim(),
                 source: elements.pkgSource.value.trim(), tags: elements.pkgTags.value.split(',').map(t => t.trim()).filter(Boolean),
-                version: parseInt(elements.pkgVersion.value, 10) || CONFIG.CURRENT_VERSION, created: new Date(elements.pkgCreated.value).getTime() || Date.now(), customData
+                version: parseInt(elements.pkgVersion.value, 10) || 1, 
+                created: new Date(elements.pkgCreated.value).getTime() || Date.now(), customData
             };
         },
-        /** Helper for when only metadata is changed, not encryption. @param {object} newGlobalMetadata - The new metadata object. */
         _updatePackageMetadataOnly: async (newGlobalMetadata) => {
             UI.updateProgress(50, "Applying new metadata...");
-            const editedShards = await Promise.all(state.shardsForEditing.map(async (shard) => {
+            const { shardsForEditing } = State.getState();
+            return Promise.all(shardsForEditing.map(async (shard) => {
                 const newHeader = { ...shard.header, ...newGlobalMetadata };
                 const payload = shard.packageFile.slice(shard.payloadStart);
                 const baseName = shard.packageFile.name.replace(/\.nyx$/, '');
-                return await Packer.buildBlob(newHeader, [payload], `${baseName}-edited`);
+                return Packer.buildBlob(newHeader, [payload], `${baseName}-edited`);
             }));
-            UI.renderDownloadArea(editedShards, elements.editDownload);
-            UI.showToast('Package metadata saved successfully!', 'success');
         },
-        /** Helper for when encryption is added, changed, or removed. @param {object} newGlobalMetadata - The new metadata object. @param {string} oldPassword - The old password. @param {string} newPassword - The new password. */
         _rebuildPackageWithEncryptionChanges: async (newGlobalMetadata, oldPassword, newPassword) => {
-            const wasEncrypted = !!state.currentMasterHeader.encryption;
-            if (wasEncrypted && !oldPassword) {
-                throw new Error("Old password is required to change or remove encryption.");
-            }
+            const { currentMasterHeader, shardsForEditing } = State.getState();
+            const wasEncrypted = !!currentMasterHeader.encryption;
+            if (wasEncrypted && !oldPassword) throw new Error("Old password is required to change or remove encryption.");
             
             let oldKey = null;
             if (wasEncrypted) {
                 UI.updateProgress(5, "Verifying old password...");
-                oldKey = await Utils.deriveKeyFromPassword(oldPassword, new Uint8Array(state.currentMasterHeader.encryption.salt));
+                oldKey = await Utils.deriveKeyFromPassword(oldPassword, new Uint8Array(currentMasterHeader.encryption.salt));
             }
             
-            const newBaseHeader = { ...state.currentMasterHeader, ...newGlobalMetadata };
+            const newBaseHeader = { ...currentMasterHeader, ...newGlobalMetadata };
             let newKey = null;
             if (newPassword) {
                 UI.updateProgress(10, "Deriving new encryption key...");
@@ -778,10 +741,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const finalPayloads = [];
             const newFileEntries = [];
-            for (let i = 0; i < state.currentMasterHeader.files.length; i++) {
-                const fileEntry = state.currentMasterHeader.files[i];
-                UI.updateProgress(15 + (i / state.currentMasterHeader.files.length) * 65, `Processing file ${i + 1}...`);
-                let currentBlob = await Importer._extractRawFileBlob(fileEntry, state.shardsForEditing);
+            for (let i = 0; i < currentMasterHeader.files.length; i++) {
+                const fileEntry = currentMasterHeader.files[i];
+                UI.updateProgress(15 + (i / currentMasterHeader.files.length) * 65, `Processing file ${i + 1}...`);
+                let currentBlob = await Importer._extractRawFileBlob(fileEntry, shardsForEditing);
                 if (wasEncrypted) {
                     try { currentBlob = await Utils.decryptBlob(currentBlob, oldKey, fileEntry.iv); }
                     catch(e) { throw new Error(`Decryption failed for ${fileEntry.name}. Incorrect old password?`); }
@@ -803,39 +766,30 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             
             newBaseHeader.files = newFileEntries;
-            const originalTotalSize = state.shardsForEditing.reduce((sum, s) => sum + s.packageFile.size, 0);
-            const originalSplitSize = state.shardsForEditing.length > 1 ? originalTotalSize / state.shardsForEditing.length : 0;
-            await Packer.buildFromPayloads(newBaseHeader, finalPayloads, originalSplitSize, elements.progress, elements.editDownload);
-            UI.showToast('Package rebuilt and saved successfully!', 'success');
-        },
-        /** Clears the editor view and resets its state. */
-        clear: () => {
-            state.shardsForEditing = []; state.currentMasterHeader = null; state.isEditorUnlocked = false;
-            elements.metadata.reset();
-            elements.editForm.classList.add(CONFIG.CLASSES.hidden);
-            elements.editKeyVerification.classList.add(CONFIG.CLASSES.hidden);
-            elements.editDownload.innerHTML = '';
-            if (elements.editInput) elements.editInput.value = '';
-            UI.showToast('Editor cleared.', 'info');
+            const originalTotalSize = shardsForEditing.reduce((sum, s) => sum + s.packageFile.size, 0);
+            const originalSplitSize = shardsForEditing.length > 1 ? originalTotalSize / shardsForEditing.length : 0;
+            return Packer.buildFromPayloads(newBaseHeader, finalPayloads, originalSplitSize);
         },
     };
 
-    // --- App Controller & Event Handlers ---
+
+    // =================================================================================
+    // --- APP CONTROLLER & EVENT HANDLERS ---
+    // =================================================================================
     const App = {
-        /** Initializes the application. */
         init() {
+            console.log("Nyx Packer App Initializing...");
             App.setupEventListeners();
             App.setupDragAndDrop();
             App.loadShardsFromUrl();
             UI.showToast('Application ready!', 'success');
             UI.updateCreateViewState();
         },
-        /** Loads shards specified in the URL query parameters. */
         loadShardsFromUrl: async () => {
             const shardUrls = new URLSearchParams(window.location.search).getAll('shard');
             if (shardUrls.length === 0) return;
             App.switchToView('import');
-            UI.showToast(`Importing ${shardUrls.length} shard(s) from URL...`, 'info');
+            UI.showToast(`Importing ${shardUrls.length} shard(s) from URL... Please wait...`, 'info');
             try {
                 const files = await Promise.all(shardUrls.map(async (url) => {
                     if (!url.startsWith('http')) throw new Error(`Invalid URL: ${url.slice(0, 30)}...`);
@@ -845,55 +799,26 @@ document.addEventListener('DOMContentLoaded', () => {
                     const filename = new URL(url).pathname.split('/').pop() || 'shard.nyx';
                     return new File([blob], filename, { type: 'application/octet-stream' });
                 }));
-                await Importer.handleImport(files);
+                await App.handleImport(files);
             } catch (e) { UI.showToast(`Error loading from URL: ${e.message}`, 'error'); console.error(e); }
         },
-        /** Switches the visible view. @param {'create'|'import'|'edit'} viewName - The name of the view to switch to. */
         switchToView: (viewName) => {
-            // Hide all views
-            Object.values(CONFIG.SELECTORS.views).forEach(selector => {
-                document.querySelector(selector)?.classList.remove(CONFIG.CLASSES.activeView);
-            });
+            console.info(`Switching to view: ${viewName}`);
+            const { isConfiguring } = State.getState();
+            const currentView = document.querySelector(`.${CONFIG.CLASSES.activeView}`);
+            if (currentView && currentView.id === 'edit-view' && isConfiguring && viewName !== 'edit') {
+                 App.returnToCreateView(false); // don't switch view again
+            }
 
-            // Deactivate all switcher buttons
-            Object.keys(CONFIG.SELECTORS.buttons).forEach(buttonKey => {
-                if (buttonKey.startsWith('switchTo')) {
-                    elements[buttonKey]?.classList.remove(CONFIG.CLASSES.activeBtn);
-                }
-            });
+            Object.values(CONFIG.SELECTORS.views).forEach(selector => document.querySelector(selector)?.classList.remove(CONFIG.CLASSES.activeView));
+            Object.values(elements).forEach(el => el?.classList?.remove(CONFIG.CLASSES.activeBtn)); // General cleanup for all buttons
 
-            // Activate the target view using the new unique key
-            const viewKey = `${viewName}View`; // e.g., 'create' -> 'createView'
+            const viewKey = `${viewName}View`;
             elements[viewKey]?.classList.add(CONFIG.CLASSES.activeView);
             
-            // Activate the target button
             const buttonKey = `switchTo${viewName.charAt(0).toUpperCase() + viewName.slice(1)}`;
             elements[buttonKey]?.classList.add(CONFIG.CLASSES.activeBtn);
         },
-        /** Adds new files to the creation list, avoiding duplicates. @param {{file: File, fullPath: string}[]} newFileObjects - Array of new file objects. */
-        addFiles: (newFileObjects) => {
-            const existingPaths = new Set(state.files.map(f => f.fullPath));
-            const validFiles = newFileObjects.filter(fObj => {
-                const alreadyExists = existingPaths.has(fObj.fullPath);
-                if (alreadyExists) UI.showToast(`File "${fObj.fullPath}" already added`, 'warning');
-                return !alreadyExists;
-            });
-            if (validFiles.length > 0) {
-                state.files.push(...validFiles);
-                UI.showToast(`Added ${validFiles.length} file${validFiles.length === 1 ? '' : 's'}`, 'success');
-                UI.updateCreateViewState();
-            }
-        },
-        /** Clears all files from the creation list. */
-        clearFiles: () => {
-            if (state.files.length === 0) return;
-            state.files = [];
-            elements.download.innerHTML = '';
-            elements.masterKeyArea.classList.add(CONFIG.CLASSES.hidden);
-            UI.showToast('All files cleared', 'success');
-            UI.updateCreateViewState();
-        },
-        /** Recursively traverses a dropped file system entry (file or directory). @param {FileSystemEntry} entry - The entry to traverse. @returns {Promise<{file: File, fullPath: string}[]>} A flat list of file objects. */
         traverseFileTree: async (entry) => {
             const files = [];
             const processEntry = async (e) => {
@@ -912,12 +837,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (entry) await processEntry(entry);
             return files;
         },
-        /** Creates and downloads a zip archive from a list of package file entries. @param {object[]} fileEntries - The file entries from the master header. @param {string} zipName - The desired name for the zip file. */
         createZipFromEntries: async (fileEntries, zipName) => {
-            if (state.isProcessing) return;
-            state.isProcessing = true;
+            if (State.getState().isProcessing) return;
+            State.setProcessing(true);
             try {
-                if (state.currentMasterHeader.encryption && !state.isContentUnlocked) {
+                const { currentMasterHeader, isContentUnlocked } = State.getState();
+                if (currentMasterHeader.encryption && !isContentUnlocked) {
                     UI.showToast('Please unlock the package content first.', 'warning');
                     elements.importPasswordPrompt.classList.remove(CONFIG.CLASSES.hidden);
                     return;
@@ -929,116 +854,326 @@ document.addEventListener('DOMContentLoaded', () => {
                 const zipBlob = await zip.generateAsync({ type: "blob" });
                 Utils.downloadBlob(zipBlob, zipName);
             } catch (e) { UI.showToast(`Failed to create zip: ${e.message}`, 'error'); console.error(e); }
-            finally { state.isProcessing = false; }
+            finally { State.setProcessing(false); }
         },
-        /** Handles delegated click events for file actions in the import view. @param {Event} event - The click event. @param {boolean} [force=false] - Whether to bypass the encryption check (used after password entry). */
+        
+        // --- Event Handler Logic ---
+        handleCreate: async () => {
+            const { files, pendingMetadata } = State.getState();
+            if (files.length === 0) return UI.showToast('Please add at least one file', 'warning');
+            if (State.getState().isProcessing) return;
+
+            console.log('Starting package creation process...');
+            State.setProcessing(true);
+            UI.clearDownloadArea();
+            UI.hideMasterKey();
+            UI.toggleProgress(true, 'Preparing package...');
+
+            try {
+                const password = elements.encryptionPassword.value;
+                const splitSizeMB = parseFloat(elements.splitSize.value);
+                const metadata = pendingMetadata || {};
+                
+                const { packages, masterKey } = await Packer.createPackage(files, password, splitSizeMB, metadata);
+
+                UI.renderDownloadArea(packages, elements.download);
+                UI.showMasterKey(masterKey);
+                UI.showToast('Package created successfully!', 'success');
+            } catch (e) {
+                UI.showToast(`Package creation failed: ${e.message}`, 'error');
+                console.error(e);
+            } finally {
+                State.setProcessing(false);
+                State.mut('pendingMetadata', null);
+                elements.encryptionPassword.value = '';
+                setTimeout(() => UI.toggleProgress(false), 1000);
+            }
+        },
+        handleImport: async (packageFiles) => {
+            if (!packageFiles || packageFiles.length === 0) return;
+            console.log(`Importing ${packageFiles.length} file(s)...`);
+            elements.pkgInfo.innerHTML = '';
+            elements.importPasswordPrompt.classList.add(CONFIG.CLASSES.hidden);
+            elements.customData.classList.add(CONFIG.CLASSES.hidden);
+            State.mut('currentEncryptionKey', null);
+            State.mut('isContentUnlocked', false);
+            document.querySelector('.inline-preview-container')?.remove();
+
+            const importToast = UI.showToast(`Processing ${packageFiles.length} shard(s)...`, 'info', 0);
+            try {
+                const headers = await Promise.all([...packageFiles].map(Importer.readPackageHeader));
+                const { masterHeader, sortedShards } = Importer.processHeaders(headers);
+                State.mut('currentMasterHeader', masterHeader);
+                State.mut('currentImportedShards', sortedShards);
+                const totalSize = sortedShards.reduce((s, sh) => s + sh.packageFile.size, 0);
+                
+                Importer.displayPackageInfo(masterHeader, totalSize);
+
+                if (masterHeader.encryption) {
+                    elements.pkgInfo.appendChild(elements.importPasswordPrompt);
+                    elements.importPasswordPrompt.classList.remove(CONFIG.CLASSES.hidden);
+                    UI.showToast('Package is encrypted. Enter password to access files.', 'info');
+                }
+
+                Importer.createFileActionsList(masterHeader.files);
+
+                UI.showToast(`Package loaded: ${masterHeader.files.length} files`, 'success');
+            } catch (e) {
+                UI.showToast(`Import failed: ${e.message}`, 'error');
+                console.error(e);
+            } finally {
+                importToast?.remove();
+            }
+        },
+        handleUnlockContent: async () => {
+            const password = elements.importPasswordInput.value;
+            const { currentMasterHeader } = State.getState();
+            if (!password || !currentMasterHeader?.encryption) return;
+
+            UI.showToast('Verifying password...', 'info');
+            try {
+                const salt = new Uint8Array(currentMasterHeader.encryption.salt);
+                const key = await Utils.deriveKeyFromPassword(password, salt);
+                State.mut('currentEncryptionKey', key);
+                
+                // Test decryption on the first file to validate the key
+                if (currentMasterHeader.files[0]) await Importer.extractFileBlob(currentMasterHeader.files[0]);
+                
+                State.mut('isContentUnlocked', true);
+                UI.showToast('Password correct! Content unlocked.', 'success');
+                Importer.refreshFileListView();
+                elements.importPasswordPrompt.classList.add(CONFIG.CLASSES.hidden);
+                elements.importPasswordInput.value = '';
+                elements.pkgInfo.querySelector('[data-action="view-custom-data"]')?.classList.remove(CONFIG.CLASSES.hidden);
+
+                const { pendingFileAction } = State.getState();
+                if (pendingFileAction) {
+                    App.handleFileAction(pendingFileAction.event, true);
+                    State.mut('pendingFileAction', null);
+                }
+            } catch (e) {
+                State.mut('currentEncryptionKey', null);
+                State.mut('isContentUnlocked', false);
+                UI.showToast(e.message || 'Incorrect password or corrupted file.', 'error');
+                console.error(e);
+            }
+        },
         handleFileAction: async (event, force = false) => {
             const button = event.target.closest('button[data-action]');
             if (!button) return;
 
             const { action, index, folderName, filesJson } = button.dataset;
-
+            const { currentMasterHeader, isContentUnlocked } = State.getState();
+            
             if (action === 'view-custom-data') {
                 elements.customData.classList.toggle(CONFIG.CLASSES.hidden);
                 return;
             }
 
-            if (state.currentMasterHeader?.encryption && !state.isContentUnlocked && !force) {
+            if (currentMasterHeader?.encryption && !isContentUnlocked && !force) {
                 UI.showToast('Password needed to access file content.', 'warning');
                 elements.importPasswordPrompt.classList.remove(CONFIG.CLASSES.hidden);
-                state.pendingFileAction = { event };
+                State.mut('pendingFileAction', { event });
                 return;
             }
 
-            const fileEntry = state.currentMasterHeader?.files[parseInt(index, 10)];
+            const fileEntry = currentMasterHeader?.files[parseInt(index, 10)];
             try {
                 if (action === 'preview' && fileEntry) {
-                    await Importer.displayPreview(await Importer.extractFileBlob(fileEntry), fileEntry);
+                    const fileItem = button.closest('.file-item');
+                    const existingPreview = fileItem.nextElementSibling;
+                    if (existingPreview?.classList.contains('inline-preview-container')) {
+                        existingPreview.remove();
+                        return;
+                    }
+                    document.querySelector('.inline-preview-container')?.remove();
+                    const blob = await Importer.extractFileBlob(fileEntry);
+                    await Importer.displayPreview(blob, fileEntry.mime, fileItem);
                 } else if (action === 'save' && fileEntry) {
                     Utils.downloadBlob(await Importer.extractFileBlob(fileEntry), fileEntry.name.split('/').pop());
                 } else if (action === 'save-folder') {
                     UI.showToast(`Creating zip for "${folderName}"...`, 'info');
-                    const entries = JSON.parse(filesJson).map(name => state.currentMasterHeader.files.find(f => f.name === name)).filter(Boolean);
+                    const entries = JSON.parse(filesJson).map(name => currentMasterHeader.files.find(f => f.name === name)).filter(Boolean);
                     await App.createZipFromEntries(entries, `${folderName}.zip`);
                 } else if (action === 'save-all-zip') {
                     UI.showToast('Creating full package zip...', 'info');
-                    await App.createZipFromEntries(state.currentMasterHeader.files, `package-all-files.zip`);
+                    await App.createZipFromEntries(currentMasterHeader.files, `package-all-files.zip`);
                 }
             } catch (e) { UI.showToast(`${action} failed: ${e.message}`, 'error'); console.error(e); }
         },
-        /** Sets up all the application's event listeners. */
+        handleConfigureMetadata: () => {
+            if (State.getState().files.length === 0) {
+                UI.showToast('Please add files before configuring metadata.', 'warning');
+                return;
+            }
+            State.mut('isConfiguring', true);
+            const tempHeader = State.getState().pendingMetadata || { created: Date.now(), version: 1 };
+            
+            Editor.displayMetadataForm(tempHeader);
+            
+            elements.editZone.parentElement.classList.add(CONFIG.CLASSES.hidden);
+            elements.editKeyVerification.classList.add(CONFIG.CLASSES.hidden);
+            elements.editDownload.classList.add(CONFIG.CLASSES.hidden);
+            elements.editEncryptionSection.classList.add(CONFIG.CLASSES.hidden);
+            elements.editForm.classList.remove(CONFIG.CLASSES.hidden);
+            elements.editForm.dataset.locked = "false";
+            elements.saveChanges.innerHTML = `<span aria-hidden="true">✅</span> Confirm Metadata`;
+            
+            App.switchToView('edit');
+        },
+        returnToCreateView: (switchView = true) => {
+            State.mut('isConfiguring', false);
+            elements.editZone.parentElement.classList.remove(CONFIG.CLASSES.hidden);
+            elements.editDownload.classList.remove(CONFIG.CLASSES.hidden);
+            elements.editForm.classList.add(CONFIG.CLASSES.hidden);
+            elements.saveChanges.innerHTML = `<span aria-hidden="true">💾</span> Save Changes`;
+            if (switchView) App.switchToView('create');
+        },
+        handleEditorLoad: async (packageFiles) => {
+            if (!packageFiles || packageFiles.length === 0) return;
+            console.log(`Loading ${packageFiles.length} file(s) for editing...`);
+            Editor.clear();
+            try {
+                const loadedShards = await Promise.all([...packageFiles].map(Importer.readPackageHeader));
+                const { masterHeader, sortedShards } = Importer.processHeaders(loadedShards);
+                State.mut('shardsForEditing', sortedShards);
+                State.mut('currentMasterHeader', masterHeader);
+                elements.editForm.classList.remove(CONFIG.CLASSES.hidden);
+                if (masterHeader.keyHash) {
+                    elements.editKeyVerification.classList.remove(CONFIG.CLASSES.hidden);
+                    elements.editForm.dataset.locked = "true";
+                    State.mut('isEditorUnlocked', false);
+                } else { Editor.unlockForm(masterHeader); }
+                UI.showToast(`Loaded "${masterHeader.packageName || 'package'}" for editing.`, 'success');
+            } catch (e) { UI.showToast(`Failed to load package: ${e.message}`, 'error'); console.error(e); Editor.clear(); }
+        },
+        handleVerifyEditorKey: async () => {
+            const key = elements.masterKey.value;
+            const { currentMasterHeader } = State.getState();
+            if (!key || !currentMasterHeader?.keyHash) return;
+
+            if (await Utils.computeStringSHA256(key) === currentMasterHeader.keyHash) {
+                UI.showToast('Key correct! Unlocking editor.', 'success');
+                Editor.unlockForm(currentMasterHeader);
+            } else { UI.showToast('Incorrect master key.', 'error'); }
+        },
+        handleSaveChanges: async () => {
+            const { isConfiguring, isEditorUnlocked } = State.getState();
+            if (isConfiguring) {
+                try {
+                    State.mut('pendingMetadata', Editor._getNewMetadataFromForm());
+                    UI.showToast('Metadata configured successfully!', 'success');
+                    App.returnToCreateView();
+                } catch (e) { UI.showToast(e.message, 'error'); }
+                return;
+            }
+
+            if (!isEditorUnlocked) return UI.showToast('Unlock the package with the master key first.', 'warning');
+            if (State.getState().isProcessing) return;
+
+            console.log('Saving package changes...');
+            State.setProcessing(true);
+            UI.toggleProgress(true, 'Preparing to rebuild package...');
+            elements.editDownload.innerHTML = '';
+
+            try {
+                const newGlobalMetadata = Editor._getNewMetadataFromForm();
+                const oldPassword = elements.editOldPassword.value;
+                const newPassword = elements.editNewPassword.value;
+                let editedShards;
+                
+                if (oldPassword || newPassword) {
+                    editedShards = await Editor._rebuildPackageWithEncryptionChanges(newGlobalMetadata, oldPassword, newPassword);
+                } else {
+                    editedShards = await Editor._updatePackageMetadataOnly(newGlobalMetadata);
+                }
+
+                UI.renderDownloadArea(editedShards, elements.editDownload);
+                UI.showToast('Package saved successfully!', 'success');
+
+            } catch (e) { UI.showToast(`Error saving package: ${e.message}`, 'error'); console.error(e); }
+            finally { 
+                State.setProcessing(false); 
+                setTimeout(() => UI.toggleProgress(false), 1500);
+            }
+        },
+
+        // --- Setup ---
         setupEventListeners: () => {
-            // View Switching
             elements.switchToCreate.addEventListener('click', () => App.switchToView('create'));
             elements.switchToImport.addEventListener('click', () => App.switchToView('import'));
             elements.switchToEdit.addEventListener('click', () => App.switchToView('edit'));
-            // File Inputs via click
+            
             elements.uploadZone.addEventListener('click', () => elements.fileInput.click());
             elements.importZone.addEventListener('click', () => elements.importInput.click());
             elements.editZone.addEventListener('click', () => elements.editInput.click());
-            // File Inputs via change event
-            elements.fileInput.addEventListener('change', e => { App.addFiles([...e.target.files].map(f => ({ file: f, fullPath: f.name }))); e.target.value = ''; });
-            elements.importInput.addEventListener('change', e => { App.switchToView('import'); Importer.handleImport(e.target.files); e.target.value = ''; });
-            elements.editInput.addEventListener('change', e => { App.switchToView('edit'); Editor.handleLoad(e.target.files); e.target.value = ''; });
             
-            // Create View
-            elements.create.addEventListener('click', Packer.handleCreate);
-            elements.clear.addEventListener('click', App.clearFiles);
+            elements.fileInput.addEventListener('change', e => { State.addFiles([...e.target.files].map(f => ({ file: f, fullPath: f.name }))); e.target.value = ''; });
+            elements.importInput.addEventListener('change', e => { App.switchToView('import'); App.handleImport(e.target.files); e.target.value = ''; });
+            elements.editInput.addEventListener('change', e => { App.switchToView('edit'); App.handleEditorLoad(e.target.files); e.target.value = ''; });
+            
+            elements.create.addEventListener('click', App.handleCreate);
+            elements.clear.addEventListener('click', () => { if (State.getState().files.length > 0) { State.resetCreateView(); UI.showToast('All files cleared', 'success'); } });
             elements.copyKey.addEventListener('click', () => { navigator.clipboard.writeText(elements.masterKeyOutput.value); UI.showToast('Master key copied!', 'success'); });
             elements.splitSize.addEventListener('input', UI.updateCreateViewState);
-            elements.fileList.addEventListener('click', (e) => {
-                const button = e.target.closest('button[data-action="remove"]');
-                if (button) {
-                    const index = parseInt(button.dataset.index, 10);
-                    if (!isNaN(index) && state.files[index]) {
-                        const [removed] = state.files.splice(index, 1);
-                        UI.updateCreateViewState(); UI.showToast(`Removed "${removed.fullPath}"`, 'success');
+            elements.configureMetadata.addEventListener('click', App.handleConfigureMetadata);
+            
+            elements.fileList.addEventListener('click', async (e) => {
+                const button = e.target.closest('button[data-action]');
+                if (!button) return;
+                const { action, index } = button.dataset;
+                const { files } = State.getState();
+                const fileObject = files[parseInt(index, 10)];
+
+                if (action === 'remove' && fileObject) {
+                    const [removed] = files.splice(index, 1);
+                    document.querySelector('.inline-preview-container')?.remove();
+                    State.setFiles(files); // Trigger update
+                    UI.showToast(`Removed "${removed.fullPath}"`, 'success');
+                } else if (action === 'preview' && fileObject) {
+                    const fileItem = button.closest('.file-item');
+                    const existingPreview = fileItem.nextElementSibling;
+                    if (existingPreview?.classList.contains('inline-preview-container')) {
+                        existingPreview.remove();
+                    } else {
+                        document.querySelector('.inline-preview-container')?.remove();
+                        await Importer.displayPreview(fileObject.file, fileObject.file.type, fileItem);
                     }
                 }
             });
-            // Import View
-            elements.clearPreview.addEventListener('click', Importer.clearPreview);
+            
             elements.pkgInfo.addEventListener('click', App.handleFileAction);
-            elements.unlockContent.addEventListener('click', Importer.handleUnlockContent);
-            // Edit View
-            elements.saveChanges.addEventListener('click', Editor.handleSaveChanges);
+            elements.unlockContent.addEventListener('click', App.handleUnlockContent);
+            
+            elements.saveChanges.addEventListener('click', App.handleSaveChanges);
             elements.clearEdit.addEventListener('click', Editor.clear);
-            elements.verifyKey.addEventListener('click', Editor.handleVerifyKey);
+            elements.verifyKey.addEventListener('click', App.handleVerifyEditorKey);
         },
-        /** Sets up drag and drop functionality for all drop zones. */
         setupDragAndDrop: () => {
             const setupZone = (zone, onDrop) => {
                 if (!zone) return;
-                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evName => {
-                    zone.addEventListener(evName, e => { e.preventDefault(); e.stopPropagation(); });
-                });
-                ['dragenter', 'dragover'].forEach(evName => {
-                    zone.addEventListener(evName, () => zone.classList.add(CONFIG.CLASSES.dragover));
-                });
-                ['dragleave', 'drop'].forEach(evName => {
-                    zone.addEventListener(evName, () => zone.classList.remove(CONFIG.CLASSES.dragover));
-                });
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evName => zone.addEventListener(evName, e => { e.preventDefault(); e.stopPropagation(); }));
+                ['dragenter', 'dragover'].forEach(evName => zone.addEventListener(evName, () => zone.classList.add(CONFIG.CLASSES.dragover)));
+                ['dragleave', 'drop'].forEach(evName => zone.addEventListener(evName, () => zone.classList.remove(CONFIG.CLASSES.dragover)));
                 zone.addEventListener('drop', onDrop);
             };
 
             setupZone(elements.uploadZone, async (e) => {
-                if (state.isProcessing) return;
-                state.isProcessing = true;
-                UI.updateCreateViewState();
+                if (State.getState().isProcessing) return;
+                State.setProcessing(true);
                 UI.showToast('Processing dropped items...', 'info');
                 try {
-                    const dataTransferItems = [...e.dataTransfer.items];
-                    const fileTreePromises = dataTransferItems.map(item => App.traverseFileTree(item.webkitGetAsEntry()));
-                    const files = (await Promise.all(fileTreePromises)).flat();
-                    App.addFiles(files);
+                    const items = [...e.dataTransfer.items].map(item => item.webkitGetAsEntry());
+                    const files = (await Promise.all(items.map(App.traverseFileTree))).flat();
+                    State.addFiles(files);
                 } catch (err) { UI.showToast('Could not process dropped items.', 'error'); console.error(err); }
-                finally { state.isProcessing = false; UI.updateCreateViewState(); }
+                finally { State.setProcessing(false); }
             });
-            setupZone(elements.importZone, (e) => { App.switchToView('import'); Importer.handleImport(e.dataTransfer.files); });
-            setupZone(elements.editZone, (e) => { App.switchToView('edit'); Editor.handleLoad(e.dataTransfer.files); });
+            setupZone(elements.importZone, (e) => { App.switchToView('import'); App.handleImport(e.dataTransfer.files); });
+            setupZone(elements.editZone, (e) => { App.switchToView('edit'); App.handleEditorLoad(e.dataTransfer.files); });
         },
     };
 
-    // --- Initialize Application ---
+    // --- GO ---
     App.init();
 });

@@ -11,12 +11,13 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-
     <header class="app-header">
         <div class="container header-container">
             <h1 class="logo">
-                <span class="logo-icon" aria-hidden="true">📦</span>
-                Nyx Packer
+                <a href="./" class="logo-link">
+                    <span class="logo-icon" aria-hidden="true">📦</span>
+                    Nyx Packer
+                </a>
             </h1>
             <p class="tagline">Create & Extract .nyx containers with ease.</p>
         </div>
@@ -48,7 +49,7 @@
                             <p class="drop-zone-subtext">or click to browse</p>
                         </div>
                     </div>
-                    <input id="fileInput" type="file" multiple class="sr-only">
+                    <input id="fileInput" type="file" multiple class="sr-only" webkitdirectory>
                 </div>
 
                 <div id="fileList" class="file-list"></div>
@@ -56,13 +57,16 @@
                 <div class="create-options">
                     <label for="splitSize">Max shard size (MB):</label>
                     <input type="number" min="0" id="splitSize" class="form-input" placeholder="e.g., 100">
-                     <label for="encryptionPassword">Encrypt Content (Optional):</label>
+                    <label for="encryptionPassword">Encrypt Content (Optional):</label>
                     <input type="password" id="encryptionPassword" class="form-input" placeholder="Enter password">
                     <span id="totalSizeInfo" class="size-info"></span>
                     <span id="shardInfo" class="size-info"></span>
                 </div>
 
                 <div class="view-actions">
+                    <button id="configureMetadataBtn" class="btn btn-secondary" disabled>
+                        <span aria-hidden="true">✏️</span> Configure Metadata
+                    </button>
                     <button id="createBtn" class="btn btn-primary" disabled>
                         <span aria-hidden="true">📦</span> Create Package
                     </button>
@@ -107,11 +111,6 @@
 
                 <div id="pkgInfo" class="package-info" aria-live="polite"></div>
                 
-                <div id="customDataContainer" class="custom-data-container hidden">
-                    <h4>Custom JSON Data</h4>
-                    <pre id="customDataContent"></pre>
-                </div>
-
                  <div id="importPasswordPrompt" class="key-verification hidden">
                     <h4>🔒 Content Encrypted</h4>
                     <p>Enter the password to preview or save files from this package.</p>
@@ -121,14 +120,9 @@
                     </div>
                 </div>
 
-                <div id="pkgPreview" class="package-preview">
-                    <div class="preview-header hidden" id="previewHeader">
-                        <h3>File Preview</h3>
-                        <button id="clearPreviewBtn" class="btn btn-small btn-secondary">
-                            <span aria-hidden="true">❌</span> Clear
-                        </button>
-                    </div>
-                    <div id="previewContent"></div>
+                <div id="customDataContainer" class="custom-data-container hidden">
+                    <h4>Custom JSON Data</h4>
+                    <pre id="customDataContent"></pre>
                 </div>
             </section>
             
@@ -235,9 +229,14 @@
                 <div class="file-name"></div>
                 <div class="file-size"></div>
             </div>
-            <button class="btn btn-small btn-danger" data-action="remove" title="Remove File" aria-label="Remove File">
-                <span aria-hidden="true">🗑️</span>
-            </button>
+            <div class="file-actions">
+                <button class="btn btn-small btn-secondary" data-action="preview" title="Preview File" aria-label="Preview File">
+                    <span aria-hidden="true">👁️</span>
+                </button>
+                <button class="btn btn-small btn-danger" data-action="remove" title="Remove File" aria-label="Remove File">
+                    <span aria-hidden="true">🗑️</span>
+                </button>
+            </div>
         </div>
     </template>
 

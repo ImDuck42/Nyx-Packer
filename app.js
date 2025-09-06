@@ -6,7 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const CONFIG = {
         CONSTANTS: {
             MAGIC: new TextEncoder().encode('NYXPKG1 '), // 8-byte package identifier
-            PACKAGE_FORMAT_VERSION: 4,                  // Version of the .nyx file structure
+            PACKAGE_FORMAT_VERSION: 5, // Version of the .nyx file structure - v5 introduced metadata protection from permitted edits via text editor
         },
         SELECTORS: {
             views: {
@@ -202,6 +202,31 @@ document.addEventListener('DOMContentLoaded', () => {
             const decryptedData = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, key, data);
             return new Blob([decryptedData]);
         },
+        getHmacKey: async (masterKey) => {
+            const keyData = new TextEncoder().encode(masterKey);
+            return crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+        },
+        generateHeaderSignature: async (headerObject, masterKey) => {
+            const key = await Utils.getHmacKey(masterKey);
+            const { headerSignature, ...signableHeader } = headerObject;
+            const canonicalString = JSON.stringify(Object.keys(signableHeader).sort().reduce((obj, key) => {
+                obj[key] = signableHeader[key];
+                return obj;
+            }, {}));
+            const signatureBuffer = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(canonicalString));
+            return Array.from(new Uint8Array(signatureBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+        },
+        verifyHeaderSignature: async (headerObject, masterKey) => {
+            if (!headerObject.headerSignature) {
+                throw new Error("Package is not signed. Cannot verify integrity.");
+            }
+            const providedSignature = headerObject.headerSignature;
+            const calculatedSignature = await Utils.generateHeaderSignature(headerObject, masterKey);
+            if (providedSignature !== calculatedSignature) {
+                throw new Error("Metadata verification failed! The package header may have been tampered with.");
+            }
+            return true;
+        },
     };
 
 
@@ -320,30 +345,34 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- PACKER MODULE (File Creation Logic) ---
     // =================================================================================
     const Packer = {
-        buildBlob: async (headerObj, payloadBlobs, baseName) => {
-            const headerBytes = new TextEncoder().encode(JSON.stringify(headerObj));
+        buildBlob: async (headerObj, payloadBlobs, baseName, masterKey = null) => {
+            let finalHeader = { ...headerObj };
+            if (masterKey) {
+                finalHeader.headerSignature = await Utils.generateHeaderSignature(finalHeader, masterKey);
+            }
+            const headerBytes = new TextEncoder().encode(JSON.stringify(finalHeader));
             const headerLenBuf = Utils.bigIntTo8Bytes(headerBytes.length);
             const blob = new Blob([CONFIG.CONSTANTS.MAGIC, headerLenBuf, headerBytes, ...payloadBlobs], { type: 'application/octet-stream' });
             const filename = `${baseName}-${new Date().toISOString().replace(/[:.]/g, '-')}.nyx`;
             return { blob, filename };
         },
-        buildFromPayloads: async (baseHeader, finalPayloads, splitSizeBytes) => {
+        buildFromPayloads: async (baseHeader, finalPayloads, splitSizeBytes, masterKey = null) => {
             const totalPayloadSize = finalPayloads.reduce((sum, blob) => sum + blob.size, 0);
             if (splitSizeBytes > 0 && totalPayloadSize > splitSizeBytes) {
-                return Packer.buildSplitPackage(baseHeader, finalPayloads, splitSizeBytes);
+                return Packer.buildSplitPackage(baseHeader, finalPayloads, splitSizeBytes, masterKey);
             }
-            return Packer.buildSinglePackage(baseHeader, finalPayloads);
+            return Packer.buildSinglePackage(baseHeader, finalPayloads, masterKey);
         },
-        buildSinglePackage: async (baseHeader, payloads) => {
+        buildSinglePackage: async (baseHeader, payloads, masterKey = null) => {
             UI.updateProgress(90, 'Building package header...');
             let offset = 0;
             const finalEntriesWithOffset = baseHeader.files.map(e => ({ ...e, offset: (offset += e.length) - e.length }));
             const headerObj = { ...baseHeader, files: finalEntriesWithOffset, totalSize: offset };
-            const builtPackage = await Packer.buildBlob(headerObj, payloads, 'package');
+            const builtPackage = await Packer.buildBlob(headerObj, payloads, 'package', masterKey);
             UI.updateProgress(100, 'Finalizing...');
             return [builtPackage];
         },
-        buildSplitPackage: async (baseHeader, payloads, splitSizeBytes) => {
+        buildSplitPackage: async (baseHeader, payloads, splitSizeBytes, masterKey = null) => {
             const shardData = [];
             const packageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
             let shardNum = 1;
@@ -354,7 +383,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const finalizeCurrentShard = async () => {
                 if (currentShard.payload.length === 0) return;
                 const headerObj = { ...baseHeader, files: currentShard.entries, totalSize: currentShard.size, splitInfo: { id: packageId, shard: shardNum, total: totalShardsEstimate } };
-                shardData.push(await Packer.buildBlob(headerObj, currentShard.payload, `package-shard${shardNum}`));
+                shardData.push(await Packer.buildBlob(headerObj, currentShard.payload, `package-shard${shardNum}`, masterKey));
                 shardNum++;
                 currentShard = { payload: [], entries: [], size: 0 };
             };
@@ -414,7 +443,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 finalPayloads.push(...files.map(f => f.file));
             }
             
-            const packages = await Packer.buildFromPayloads(baseHeader, finalPayloads, splitSizeBytes);
+            const packages = await Packer.buildFromPayloads(baseHeader, finalPayloads, splitSizeBytes, masterKey);
             return { packages, masterKey };
         },
     };
@@ -435,7 +464,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const header = JSON.parse(new TextDecoder().decode(headerJsonBuffer));
                 return { header, payloadStart: headerEnd, packageFile };
-            } catch (e) { throw new Error('Invalid package file (corrupted header)'); }
+            } catch (e) { throw new Error('Corrupted header (possible unauthorized metadata tampering)'); }
         },
         processHeaders: (headers) => {
             if (headers.length === 0) throw new Error("No valid package shards found.");
@@ -654,7 +683,8 @@ document.addEventListener('DOMContentLoaded', () => {
             State.mut('isEditorUnlocked', true);
             elements.editKeyVerification.classList.add(CONFIG.CLASSES.hidden);
             elements.editForm.dataset.locked = "false";
-            elements.masterKey.value = '';
+            // Do not clear the master key input so it can be used for saving
+            // elements.masterKey.value = '';
             Editor.displayMetadataForm(header);
         },
         displayMetadataForm: (header) => {
@@ -707,17 +737,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 created: new Date(elements.pkgCreated.value).getTime() || Date.now(), customData
             };
         },
-        _updatePackageMetadataOnly: async (newGlobalMetadata) => {
+        _updatePackageMetadataOnly: async (newGlobalMetadata, masterKey) => {
             UI.updateProgress(50, "Applying new metadata...");
-            const { shardsForEditing } = State.getState();
-            return Promise.all(shardsForEditing.map(async (shard) => {
-                const newHeader = { ...shard.header, ...newGlobalMetadata };
-                const payload = shard.packageFile.slice(shard.payloadStart);
-                const baseName = shard.packageFile.name.replace(/\.nyx$/, '');
-                return Packer.buildBlob(newHeader, [payload], `${baseName}-edited`);
-            }));
+            const { shardsForEditing, currentMasterHeader } = State.getState();
+            
+            const baseHeader = { ...currentMasterHeader, ...newGlobalMetadata };
+            baseHeader.keyHash = await Utils.computeStringSHA256(masterKey);
+
+            if (shardsForEditing.length > 1) {
+                const payloads = await Promise.all(currentMasterHeader.files.map(file => Importer._extractRawFileBlob(file, shardsForEditing)));
+                const originalTotalSize = shardsForEditing.reduce((sum, s) => sum + s.packageFile.size, 0);
+                const originalSplitSize = originalTotalSize / shardsForEditing.length;
+                return Packer.buildFromPayloads(baseHeader, payloads, originalSplitSize, masterKey);
+            } else {
+                 const shard = shardsForEditing[0];
+                 const payload = shard.packageFile.slice(shard.payloadStart);
+                 const baseName = shard.packageFile.name.replace(/\.nyx$/, '');
+                 const newPackage = await Packer.buildBlob(baseHeader, [payload], `${baseName}-edited`, masterKey);
+                 return [newPackage];
+            }
         },
-        _rebuildPackageWithEncryptionChanges: async (newGlobalMetadata, oldPassword, newPassword) => {
+        _rebuildPackageWithEncryptionChanges: async (newGlobalMetadata, oldPassword, newPassword, masterKey) => {
             const { currentMasterHeader, shardsForEditing } = State.getState();
             const wasEncrypted = !!currentMasterHeader.encryption;
             if (wasEncrypted && !oldPassword) throw new Error("Old password is required to change or remove encryption.");
@@ -729,6 +769,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             
             const newBaseHeader = { ...currentMasterHeader, ...newGlobalMetadata };
+            newBaseHeader.keyHash = await Utils.computeStringSHA256(masterKey);
             let newKey = null;
             if (newPassword) {
                 UI.updateProgress(10, "Deriving new encryption key...");
@@ -768,7 +809,7 @@ document.addEventListener('DOMContentLoaded', () => {
             newBaseHeader.files = newFileEntries;
             const originalTotalSize = shardsForEditing.reduce((sum, s) => sum + s.packageFile.size, 0);
             const originalSplitSize = shardsForEditing.length > 1 ? originalTotalSize / shardsForEditing.length : 0;
-            return Packer.buildFromPayloads(newBaseHeader, finalPayloads, originalSplitSize);
+            return Packer.buildFromPayloads(newBaseHeader, finalPayloads, originalSplitSize, masterKey);
         },
     };
 
@@ -908,15 +949,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const totalSize = sortedShards.reduce((s, sh) => s + sh.packageFile.size, 0);
                 
                 Importer.displayPackageInfo(masterHeader, totalSize);
+                Importer.createFileActionsList(masterHeader.files);
 
                 if (masterHeader.encryption) {
                     elements.pkgInfo.appendChild(elements.importPasswordPrompt);
                     elements.importPasswordPrompt.classList.remove(CONFIG.CLASSES.hidden);
                     UI.showToast('Package is encrypted. Enter password to access files.', 'info');
                 }
-
-                Importer.createFileActionsList(masterHeader.files);
-
+                
                 UI.showToast(`Package loaded: ${masterHeader.files.length} files`, 'success');
             } catch (e) {
                 UI.showToast(`Import failed: ${e.message}`, 'error');
@@ -1034,7 +1074,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log(`Loading ${packageFiles.length} file(s) for editing...`);
             Editor.clear();
             try {
-                const loadedShards = await Promise.all([...packageFiles].map(Importer.readPackageHeader));
+                const loadedShards = await Promise.all(packageFiles.map(Importer.readPackageHeader));
                 const { masterHeader, sortedShards } = Importer.processHeaders(loadedShards);
                 State.mut('shardsForEditing', sortedShards);
                 State.mut('currentMasterHeader', masterHeader);
@@ -1053,8 +1093,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!key || !currentMasterHeader?.keyHash) return;
 
             if (await Utils.computeStringSHA256(key) === currentMasterHeader.keyHash) {
-                UI.showToast('Key correct! Unlocking editor.', 'success');
-                Editor.unlockForm(currentMasterHeader);
+                try {
+                    await Utils.verifyHeaderSignature(currentMasterHeader, key);
+                    UI.showToast('Key correct! Unlocking editor.', 'success');
+                    Editor.unlockForm(currentMasterHeader);
+                } catch (e) {
+                    UI.showToast(`Error: ${e.message}`, 'error');
+                    console.error(e);
+                }
             } else { UI.showToast('Incorrect master key.', 'error'); }
         },
         handleSaveChanges: async () => {
@@ -1069,6 +1115,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (!isEditorUnlocked) return UI.showToast('Unlock the package with the master key first.', 'warning');
+            const masterKey = elements.masterKey.value;
+            if (!masterKey) {
+                return UI.showToast('Master key is required to sign and save changes. Please re-enter it.', 'warning');
+            }
             if (State.getState().isProcessing) return;
 
             console.log('Saving package changes...');
@@ -1083,9 +1133,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 let editedShards;
                 
                 if (oldPassword || newPassword) {
-                    editedShards = await Editor._rebuildPackageWithEncryptionChanges(newGlobalMetadata, oldPassword, newPassword);
+                    editedShards = await Editor._rebuildPackageWithEncryptionChanges(newGlobalMetadata, oldPassword, newPassword, masterKey);
                 } else {
-                    editedShards = await Editor._updatePackageMetadataOnly(newGlobalMetadata);
+                    editedShards = await Editor._updatePackageMetadataOnly(newGlobalMetadata, masterKey);
                 }
 
                 UI.renderDownloadArea(editedShards, elements.editDownload);
@@ -1110,7 +1160,15 @@ document.addEventListener('DOMContentLoaded', () => {
             
             elements.fileInput.addEventListener('change', e => { State.addFiles([...e.target.files].map(f => ({ file: f, fullPath: f.name }))); e.target.value = ''; });
             elements.importInput.addEventListener('change', e => { App.switchToView('import'); App.handleImport(e.target.files); e.target.value = ''; });
-            elements.editInput.addEventListener('change', e => { App.switchToView('edit'); App.handleEditorLoad(e.target.files); e.target.value = ''; });
+            
+            elements.editInput.addEventListener('change', e => {
+                const files = [...e.target.files];
+                e.target.value = '';
+                if (files.length > 0) {
+                    App.switchToView('edit');
+                    App.handleEditorLoad(files);
+                }
+            });
             
             elements.create.addEventListener('click', App.handleCreate);
             elements.clear.addEventListener('click', () => { if (State.getState().files.length > 0) { State.resetCreateView(); UI.showToast('All files cleared', 'success'); } });

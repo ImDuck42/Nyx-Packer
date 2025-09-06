@@ -6,7 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const CONFIG = {
         CONSTANTS: {
             MAGIC: new TextEncoder().encode('NYXPKG1 '), // 8-byte package identifier
-            PACKAGE_FORMAT_VERSION: 5, // Version of the .nyx file structure - v5 introduced metadata protection from permitted edits via text editor
+            PACKAGE_FORMAT_VERSION: 5, // Version of the .nyx file structure - v5 introduced metadata protection from unpermitted edits via text editor
         },
         SELECTORS: {
             views: {

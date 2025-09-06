@@ -908,14 +908,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 const totalSize = sortedShards.reduce((s, sh) => s + sh.packageFile.size, 0);
                 
                 Importer.displayPackageInfo(masterHeader, totalSize);
-                Importer.createFileActionsList(masterHeader.files);
 
                 if (masterHeader.encryption) {
                     elements.pkgInfo.appendChild(elements.importPasswordPrompt);
                     elements.importPasswordPrompt.classList.remove(CONFIG.CLASSES.hidden);
                     UI.showToast('Package is encrypted. Enter password to access files.', 'info');
                 }
-                
+
+                Importer.createFileActionsList(masterHeader.files);
+
                 UI.showToast(`Package loaded: ${masterHeader.files.length} files`, 'success');
             } catch (e) {
                 UI.showToast(`Import failed: ${e.message}`, 'error');

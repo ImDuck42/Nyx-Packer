@@ -363,7 +363,7 @@ textarea.form-input {
 .key-verification {
     margin-bottom: var(--spacing-lg);
     padding: var(--spacing-lg);
-    background: rgba(0, 0, 0, 0.15);
+    background: var(--bg-element);
     border-radius: var(--radius-md);
 }
 

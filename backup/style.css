@@ -13,7 +13,6 @@
     --error-color: #ff4757;
     --success-color: #2ecc71;
     --warning-color: #f1c40f;
-
     --border-color: rgba(184, 184, 208, 0.15);
     --shadow-color: rgba(0, 0, 0, 0.25);
 
@@ -30,8 +29,7 @@
     --radius-sm: 0.375rem;
     --radius-md: 0.625rem;
     --radius-lg: 1rem;
-
-    --container-width: 1200px;
+    --container-width: 1100px;
 
     /* Transitions */
     --transition-fast: 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);

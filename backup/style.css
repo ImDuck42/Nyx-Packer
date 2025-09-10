@@ -408,6 +408,9 @@ textarea.form-input {
     font-size: 0.9rem;
     font-weight: 500;
     color: var(--text-secondary);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
 }
 
 .form-note {

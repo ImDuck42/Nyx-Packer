@@ -1,18 +1,20 @@
 document.addEventListener('DOMContentLoaded', () => {
-    'use strict';
 
-    //=================================================================================
-    //  CONFIGURATION & CONSTANTS
-    //=================================================================================
+    // =================================================================================
+    // --- CONFIGURATION & CONSTANTS ---
+    // =================================================================================
     const CONFIG = {
         CONSTANTS: {
-            MAGIC: new TextEncoder().encode('NYXPKG1 '),    // 8-byte package identifier
-            PACKAGE_FORMAT_VERSION: 5,                      // v5 introduced metadata protection via HMAC signature
+            MAGIC: new TextEncoder().encode('NYXPKG1 '), // 8-byte package identifier
+            PACKAGE_FORMAT_VERSION: 5, // v5 introduced metadata protection via HMAC signature
             SHARE_KEY_MATERIAL: 'NYX-SHARE-OBFUSCATION-KEY-V1',
         },
         SELECTORS: {
             views: {
-                createView: '#create-view', importView: '#import-view', editView: '#edit-view', shareView: '#share-view',
+                createView: '#create-view',
+                importView: '#import-view',
+                editView: '#edit-view',
+                shareView: '#share-view',
             },
             buttons: {
                 switchToCreate: '#switchToCreate', switchToImport: '#switchToImport', switchToEdit: '#switchToEdit', switchToShare: '#switchToShare',
@@ -61,9 +63,9 @@ document.addEventListener('DOMContentLoaded', () => {
         },
     };
 
-    //=================================================================================
-    //  DOM ELEMENT CACHE
-    //=================================================================================
+    // =================================================================================
+    // --- DOM ELEMENT CACHE ---
+    // =================================================================================
     const elements = Object.values(CONFIG.SELECTORS).reduce((acc, group) => {
         for (const [key, selector] of Object.entries(group)) {
             acc[key] = document.querySelector(selector);
@@ -72,23 +74,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }, {});
 
 
-    //=================================================================================
-    //  STATE MANAGEMENT
-    //=================================================================================
+    // =================================================================================
+    // --- STATE MANAGEMENT ---
+    // =================================================================================
+    /**
+     * Manages the application's state in a centralized, private manner.
+     */
     const State = (() => {
         const _state = {
-            files: [],                  // Files staged for package creation
-            isProcessing: false,        // Global flag for long-running tasks
-            currentImportedShards: [],  // Shard data for the imported package
-            currentMasterHeader: null,  // Assembled header from imported shards
-            activePreviewUrl: null,     // Object URL for the current preview to allow revocation
-            shardsForEditing: [],       // Shard data for the package being edited
-            isEditorUnlocked: false,    // Flag indicating if the editor form is unlocked
+            files: [], // Files staged for creation
+            isProcessing: false, // Global flag for long-running tasks
+            currentImportedShards: [], // Shard data for the imported package
+            currentMasterHeader: null, // Assembled header from imported shards
+            activePreviewUrl: null, // Object URL for the current preview to allow revocation
+            shardsForEditing: [], // Shard data for the package being edited
+            isEditorUnlocked: false, // Flag indicating if the editor form is unlocked
             currentEncryptionKey: null, // CryptoKey object for decryption
-            pendingFileAction: null,    // Caches a file action (e.g., download) while waiting for password
-            isContentUnlocked: false,   // Flag indicating if encrypted content is accessible
-            pendingMetadata: null,      // Caches metadata from the configuration step
-            isConfiguring: false,       // Flag for when the editor is used for pre-creation metadata config
+            pendingFileAction: null, // Caches a file action (e.g., download) while waiting for password
+            isContentUnlocked: false, // Flag indicating if encrypted content is accessible
+            pendingMetadata: null, // Caches metadata from the configuration step
+            isConfiguring: false, // Flag for when the editor is being used for pre-creation metadata config
         };
 
         return {
@@ -138,22 +143,20 @@ document.addEventListener('DOMContentLoaded', () => {
     })();
 
 
-    //=================================================================================
-    //  UTILITY MODULE
-    //=================================================================================
+    // =================================================================================
+    // --- UTILITY MODULE ---
+    // =================================================================================
+    /**
+     * Provides generic helper functions for data manipulation and cryptography.
+     */
     const Utils = {
-        // Converts bytes to a human-readable string (KB, MB, GB)
         humanSize: bytes => {
             if (bytes === 0) return '0 B';
             const units = ['B', 'KB', 'MB', 'GB', 'TB'];
             const i = Math.floor(Math.log(bytes) / Math.log(1024));
             return `${parseFloat((bytes / Math.pow(1024, i)).toFixed(2))} ${units[i]}`;
         },
-
-        // Escapes HTML special characters in a string
         escapeHtml: text => String(text ?? '').replace(/[&<>"']/g, match => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[match])),
-
-        /** Triggers a browser download for a given Blob. */
         downloadBlob: (blob, filename) => {
             const url = URL.createObjectURL(blob);
             const a = Object.assign(document.createElement('a'), { href: url, download: filename, style: "display: none;" });
@@ -161,39 +164,27 @@ document.addEventListener('DOMContentLoaded', () => {
             document.body.removeChild(a);
             setTimeout(() => URL.revokeObjectURL(url), 60000);
         },
-
-        // Converts a BigInt to an 8-byte big-endian Uint8Array
         bigIntTo8Bytes: n => {
             const buf = new ArrayBuffer(8);
-            new DataView(buf).setBigUint64(0, BigInt(n), false);
+            new DataView(buf).setBigUint64(0, BigInt(n), false); // Big-endian
             return new Uint8Array(buf);
         },
-
-        // Reads an 8-byte big-endian Uint8Array into a BigInt
-        readBigInt8Bytes: bytes => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getBigUint64(0, false),
-
-        // Computes the SHA-256 hash of a string
+        readBigInt8Bytes: bytes => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getBigUint64(0, false), // Big-endian
         computeStringSHA256: async str => {
             const buf = new TextEncoder().encode(str);
             const hashBuf = await crypto.subtle.digest('SHA-256', buf);
             return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
         },
-
-        // Generates a cryptographically random string for the master key
         generateMasterKey: (length = 42) => {
             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
             const randomValues = new Uint32Array(length);
             crypto.getRandomValues(randomValues);
             return Array.from(randomValues, val => chars[val % chars.length]).join('');
         },
-
-        // Formats a Date object into a local ISO-like string for datetime-local input
         dateToLocalISO: date => {
             const tzoffset = date.getTimezoneOffset() * 60000;
             return new Date(date.getTime() - tzoffset).toISOString().slice(0, 16);
         },
-
-        // Obfuscates a filename for display when content is locked
         censorFilename: path => path.split('/').map(part => {
             const lastDot = part.lastIndexOf('.');
             if (lastDot <= 0) return '*'.repeat(part.length);
@@ -201,8 +192,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const ext = part.substring(lastDot);
             return '*'.repeat(name.length) + ext;
         }).join('/'),
-
-        // Derives an AES-GCM CryptoKey from a password and salt using PBKDF2
         deriveKeyFromPassword: async (password, salt) => {
             const enc = new TextEncoder().encode(password);
             const keyMaterial = await crypto.subtle.importKey('raw', enc, { name: 'PBKDF2' }, false, ['deriveKey']);
@@ -211,30 +200,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 keyMaterial, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
             );
         },
-
-        // Encrypts a Blob using AES-GCM
         encryptBlob: async (blob, key) => {
             const iv = crypto.getRandomValues(new Uint8Array(12));
             const data = await blob.arrayBuffer();
             const encryptedData = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
             return { encryptedBlob: new Blob([encryptedData]), iv: Array.from(iv) };
         },
-
-        // Decrypts a Blob using AES-GCM
         decryptBlob: async (encryptedBlob, key, iv) => {
             const data = await encryptedBlob.arrayBuffer();
             const ivBytes = new Uint8Array(iv);
             const decryptedData = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, key, data);
             return new Blob([decryptedData]);
         },
-
-        // Derives an HMAC key from the master key string
         getHmacKey: async (masterKey) => {
             const keyData = new TextEncoder().encode(masterKey);
             return crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
         },
-
-        // Generates an HMAC signature for a package header object
         generateHeaderSignature: async (headerObject, masterKey) => {
             const key = await Utils.getHmacKey(masterKey);
             const { headerSignature, ...signableHeader } = headerObject;
@@ -244,8 +225,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const signatureBuffer = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(canonicalString));
             return Array.from(new Uint8Array(signatureBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
         },
-
-        // Verifies the HMAC signature of a package header
         verifyHeaderSignature: async (headerObject, masterKey) => {
             if (!headerObject.headerSignature) {
                 throw new Error("Package is not signed. Cannot verify integrity.");
@@ -259,24 +238,22 @@ document.addEventListener('DOMContentLoaded', () => {
         },
     };
 
-
-    //=================================================================================
-    //  SHARE UTILITY MODULE
-    //=================================================================================
+    // =================================================================================
+    // --- SHARE UTILITY MODULE ---
+    // =================================================================================
+    /**
+     * Handles creation and parsing of sharable URLs.
+     */
     const ShareUtils = {
         _b64ToUrlSafe: b64 => b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
         _urlSafeToB64: b64 => b64.replace(/-/g, '+').replace(/_/g, '/'),
         _arrayBufferToBase64: buffer => window.btoa(String.fromCharCode(...new Uint8Array(buffer))),
         _base64ToArrayBuffer: base64 => Uint8Array.from(window.atob(base64), c => c.charCodeAt(0)).buffer,
-
-        // Derives a static key for encrypting/decrypting passwords in share links
         _getShareCryptoKey: async () => {
             const salt = new TextEncoder().encode('nyx-salt');
             const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(CONFIG.CONSTANTS.SHARE_KEY_MATERIAL), { name: 'PBKDF2' }, false, ['deriveKey']);
             return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 1000, hash: 'SHA-256' }, keyMaterial, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
         },
-
-        // Encrypts a password for inclusion in a share link
         encryptPassword: async (password) => {
             if (!password) return null;
             const key = await ShareUtils._getShareCryptoKey();
@@ -287,8 +264,6 @@ document.addEventListener('DOMContentLoaded', () => {
             combined.set(new Uint8Array(encrypted), iv.length);
             return ShareUtils._b64ToUrlSafe(ShareUtils._arrayBufferToBase64(combined.buffer));
         },
-
-        // Decrypts a password from a share link
         decryptPassword: async (encryptedB64) => {
             if (!encryptedB64) return null;
             try {
@@ -303,8 +278,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 return null;
             }
         },
-
-        // Compresses an array of URLs into a compact, URL-safe string
         compressUrls: async (urls) => {
             if (urls.length === 0) return '';
             const findCommonPrefix = (strs) => {
@@ -325,8 +298,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const compressed = await new Response(stream).arrayBuffer();
             return ShareUtils._b64ToUrlSafe(ShareUtils._arrayBufferToBase64(compressed));
         },
-
-        // Decompresses a URL-safe string back into an array of URLs
         decompressUrls: async (compressedB64) => {
             if (!compressedB64) return [];
             const compressed = ShareUtils._base64ToArrayBuffer(ShareUtils._urlSafeToB64(compressedB64));
@@ -337,12 +308,13 @@ document.addEventListener('DOMContentLoaded', () => {
         },
     };
 
-
-    //=================================================================================
-    //  UI MODULE
-    //=================================================================================
+    // =================================================================================
+    // --- UI MODULE (Handles all DOM manipulations) ---
+    // =================================================================================
+    /**
+     * Manages all direct interactions with the DOM.
+     */
     const UI = {
-        // Displays a toast notification
         showToast: (message, type = 'info', duration = 4000) => {
             if (!elements.toast) return;
             const toast = Object.assign(document.createElement('div'), { className: `toast ${type}`, textContent: message, role: 'status' });
@@ -350,22 +322,16 @@ document.addEventListener('DOMContentLoaded', () => {
             if (duration > 0) setTimeout(() => toast.remove(), duration);
             return toast;
         },
-
-        // Updates the progress bar
         updateProgress: (percent, text) => {
             const clampedPercent = Math.max(0, Math.min(100, percent));
             elements.progressFill.style.width = `${clampedPercent}%`;
             elements.progressFill.setAttribute('aria-valuenow', String(clampedPercent));
             if (text) elements.progressText.textContent = text;
         },
-
-        // Shows or hides the progress bar
         toggleProgress: (show, text = 'Preparing...') => {
             elements.progress.classList.toggle(CONFIG.CLASSES.hidden, !show);
             if (show) UI.updateProgress(0, text);
         },
-
-        // Returns an appropriate emoji icon for a given MIME type
         getFileIcon: mimeType => {
             const { currentMasterHeader, isContentUnlocked } = State.getState();
             if (!mimeType) return '📄';
@@ -378,8 +344,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (CONFIG.SUPPORTED_PREVIEW_TYPES.archive.includes(mimeType)) return '📦';
             return '📄';
         },
-
-        // Renders the list of files staged for creation
         renderFileList: () => {
             const { files } = State.getState();
             elements.fileList.innerHTML = '';
@@ -399,8 +363,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             elements.fileList.appendChild(fragment);
         },
-
-        // Updates the state of the 'Create' view based on current application state
         updateCreateViewState: () => {
             const { files, isProcessing } = State.getState();
             UI.renderFileList();
@@ -416,8 +378,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const splitSizeBytes = splitSizeMB * 1024 * 1024;
             elements.shardInfo.textContent = totalSize > splitSizeBytes ? `(≈ ${Math.ceil(totalSize / splitSizeBytes)} shards)` : '';
         },
-
-        // Renders download links for generated package files
         renderDownloadArea: (files, targetElement) => {
             targetElement.innerHTML = '';
             if (files.length === 0) return;
@@ -435,51 +395,41 @@ document.addEventListener('DOMContentLoaded', () => {
             targetElement.appendChild(linksContainer);
 
             if (files.length > 1) {
-                const button = Object.assign(document.createElement('button'), { 
-                    className: 'btn btn-primary', 
-                    innerHTML: `💾 Download All as .zip` 
-                });
+                const allContainer = document.createElement('div');
+                const button = Object.assign(document.createElement('button'), { className: 'btn btn-primary', innerHTML: `💾 Download All as .zip` });
                 button.onclick = async () => {
                     if (State.getState().isProcessing) return;
                     State.setProcessing(true);
-                    const toast = UI.showToast('Zipping files...', 'info', 0);
+                    UI.showToast('Zipping files...', 'info');
                     try {
                         const zip = new JSZip();
                         files.forEach(f => zip.file(f.filename, f.blob));
                         const zipBlob = await zip.generateAsync({ type: "blob" });
                         Utils.downloadBlob(zipBlob, `package-shards.zip`);
                         UI.showToast('ZIP archive created!', 'success');
-                    } catch (e) { 
-                        UI.showToast(`Failed to create zip: ${e.message}`, 'error'); 
-                        console.error(e); 
-                    } finally { 
-                        State.setProcessing(false); 
-                        toast.remove();
-                    }
+                    } catch (e) { UI.showToast(`Failed to create zip: ${e.message}`, 'error'); console.error(e); }
+                    finally { State.setProcessing(false); }
                 };
-                targetElement.prepend(button);
+                allContainer.appendChild(button);
+                targetElement.prepend(allContainer);
             }
         },
-
-        // Displays the master key area
         showMasterKey: (masterKey) => {
             elements.masterKeyOutput.value = masterKey;
             elements.masterKeyArea.classList.remove(CONFIG.CLASSES.hidden);
         },
-
-        // Hides the master key area
         hideMasterKey: () => elements.masterKeyArea.classList.add(CONFIG.CLASSES.hidden),
-
-        // Clears the download links area
         clearDownloadArea: () => elements.download.innerHTML = '',
     };
 
 
-    //=================================================================================
-    //  PACKER MODULE
-    //=================================================================================
+    // =================================================================================
+    // --- PACKER MODULE (File Creation Logic) ---
+    // =================================================================================
+    /**
+     * Handles the logic for building .nyx packages from source files.
+     */
     const Packer = {
-        // Assembles a single .nyx package Blob from a header and payload
         buildBlob: async (headerObj, payloadBlobs, baseName, masterKey = null) => {
             let finalHeader = { ...headerObj };
             if (masterKey) {
@@ -491,8 +441,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const filename = `${baseName}-${new Date().toISOString().replace(/[:.]/g, '-')}.nyx`;
             return { blob, filename };
         },
-
-        // Determines whether to build a single or split package
         buildFromPayloads: async (baseHeader, finalPayloads, splitSizeBytes, masterKey = null) => {
             const totalPayloadSize = finalPayloads.reduce((sum, blob) => sum + blob.size, 0);
             if (splitSizeBytes > 0 && totalPayloadSize > splitSizeBytes) {
@@ -500,8 +448,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             return Packer.buildSinglePackage(baseHeader, finalPayloads, masterKey);
         },
-
-        // Builds a single, non-split .nyx package
         buildSinglePackage: async (baseHeader, payloads, masterKey = null) => {
             UI.updateProgress(90, 'Building package header...');
             let offset = 0;
@@ -511,8 +457,6 @@ document.addEventListener('DOMContentLoaded', () => {
             UI.updateProgress(100, 'Finalizing...');
             return [builtPackage];
         },
-
-        // Builds a multi-file, split (sharded) .nyx package
         buildSplitPackage: async (baseHeader, payloads, splitSizeBytes, masterKey = null) => {
             const shardData = [];
             const packageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -551,8 +495,6 @@ document.addEventListener('DOMContentLoaded', () => {
             UI.showToast(`Package successfully split into ${shardNum - 1} shards.`, 'success');
             return shardData;
         },
-
-        // Main package creation orchestrator
         createPackage: async (files, password, splitSizeMB, metadata) => {
             const masterKey = Utils.generateMasterKey();
             const keyHash = await Utils.computeStringSHA256(masterKey);
@@ -592,11 +534,13 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
 
-    //=================================================================================
-    //  IMPORTER MODULE
-    //=================================================================================
+    // =================================================================================
+    // --- IMPORTER MODULE (File Extraction Logic) ---
+    // =================================================================================
+    /**
+     * Handles parsing .nyx packages and extracting file content.
+     */
     const Importer = {
-        // Reads and parses the header of a .nyx package file
         readPackageHeader: async (packageFile) => {
             if (!packageFile.name.toLowerCase().endsWith('.nyx')) throw new Error(`Invalid file type: ${packageFile.name}`);
             const headerBuffer = await packageFile.slice(0, 16).arrayBuffer();
@@ -611,8 +555,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 return { header, payloadStart: headerEnd, packageFile };
             } catch (e) { throw new Error('Corrupted header (possible unauthorized metadata tampering)'); }
         },
-
-        // Processes multiple shard headers to assemble a single master header
         processHeaders: (headers) => {
             if (headers.length === 0) throw new Error("No valid package shards found.");
             const firstHeader = headers[0].header;
@@ -640,8 +582,6 @@ document.addEventListener('DOMContentLoaded', () => {
             delete masterHeader.splitInfo;
             return { masterHeader, sortedShards };
         },
-
-        // Extracts the raw (potentially encrypted) Blob for a file from its shards
         _extractRawFileBlob: async (fileEntry, sourceShards) => {
              if (!fileEntry.chunks || fileEntry.chunks.length === 0) {
                 const shard = sourceShards[0];
@@ -655,8 +595,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }));
             return new Blob(chunkBlobs);
         },
-
-        // Extracts and decrypts (if necessary) the Blob for a file
         extractFileBlob: async (fileEntry) => {
             const { currentImportedShards, currentMasterHeader, currentEncryptionKey } = State.getState();
             const rawBlob = await Importer._extractRawFileBlob(fileEntry, currentImportedShards);
@@ -672,8 +610,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             return new Blob([await rawBlob.arrayBuffer()], { type: fileEntry.mime });
         },
-
-        // Renders the package metadata and summary information
         displayPackageInfo: (header, totalSize) => {
             const { currentImportedShards } = State.getState();
             elements.pkgInfo.innerHTML = '';
@@ -721,8 +657,6 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if(header.customData) elements.customDataContent.textContent = JSON.stringify(header.customData, null, 2);
         },
-
-        // Renders the list of files within an imported package
         createFileActionsList: (files) => {
             const listContainer = Object.assign(document.createElement('div'), { className: 'file-list' });
             const rootEntries = new Map();
@@ -744,8 +678,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             elements.pkgInfo.appendChild(listContainer);
         },
-
-        // Creates a DOM element for a folder in the imported file list
         createPackageFolderItem: (folderName, folderFiles) => {
             const { currentMasterHeader, isContentUnlocked } = State.getState();
             const item = document.createElement('div');
@@ -761,8 +693,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="file-actions"><button class="btn btn-small btn-primary" data-action="save-folder" data-folder-name="${Utils.escapeHtml(folderName)}" data-files-json='${fileNamesJson}'>💾 ZIP</button></div>`;
             return item;
         },
-
-        // Creates a DOM element for a single file in the imported file list
         createPackageFileItem: (fileEntry, index) => {
             const { currentMasterHeader, isContentUnlocked } = State.getState();
             const item = document.createElement('div');
@@ -779,8 +709,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>`;
             return item;
         },
-
-        // Refreshes the file list view, typically after unlocking content
         refreshFileListView: () => {
             const { currentMasterHeader } = State.getState();
             elements.pkgInfo.querySelector('.file-list')?.remove();
@@ -788,8 +716,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 Importer.createFileActionsList(currentMasterHeader.files);
             }
         },
-
-        // Displays an inline preview for a file
         displayPreview: async (blob, mimeType, targetFileItem) => {
             const { activePreviewUrl } = State.getState();
             if (activePreviewUrl) { URL.revokeObjectURL(activePreviewUrl); State.mut('activePreviewUrl', null); }
@@ -810,8 +736,6 @@ document.addEventListener('DOMContentLoaded', () => {
             
             targetFileItem.after(container);
         },
-
-        // Returns the appropriate preview handler function for a given MIME type
         getPreviewerForMime: mime => {
             if (!mime) return Importer.previewFallback;
             if (CONFIG.SUPPORTED_PREVIEW_TYPES.archive.includes(mime)) return Importer.previewArchive;
@@ -822,7 +746,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (mime.startsWith('text/') || ['application/json', 'application/xml', 'application/javascript'].includes(mime)) return Importer.previewText;
             return Importer.previewFallback;
         },
-
         previewArchive: async (blob, wrapper) => {
             try {
                 const zip = await JSZip.loadAsync(blob);
@@ -855,19 +778,19 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
 
-    //=================================================================================
-    //  EDITOR MODULE
-    //=================================================================================
+    // =================================================================================
+    // --- EDITOR MODULE (Metadata Editing Logic) ---
+    // =================================================================================
+    /**
+     * Handles the business logic for the package editing view.
+     */
     const Editor = {
-        // Unlocks the editor form after master key verification
         unlockForm: (header) => {
             State.mut('isEditorUnlocked', true);
             elements.editKeyVerification.classList.add(CONFIG.CLASSES.hidden);
             elements.editForm.dataset.locked = "false";
             Editor.displayMetadataForm(header);
         },
-
-        // Populates the metadata form with data from a package header
         displayMetadataForm: (header) => {
             elements.metadata.reset();
             elements.pkgName.value = header.packageName ?? '';
@@ -890,8 +813,6 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.editOldPassword.value = '';
             elements.editNewPassword.value = '';
         },
-
-        // Clears the editor view and resets its state
         clear: () => {
             if (State.getState().isConfiguring) {
                 App.returnToCreateView();
@@ -907,8 +828,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (elements.editInput) elements.editInput.value = '';
             UI.showToast('Editor cleared.', 'info');
         },
-
-        // Retrieves and validates metadata from the editor form
         _getNewMetadataFromForm: () => {
             let customData = null;
             const customDataValue = elements.pkgCustomData.value.trim();
@@ -923,8 +842,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 created: new Date(elements.pkgCreated.value).getTime() || Date.now(), customData
             };
         },
-
-        // Rebuilds the package with only metadata changes
         _updatePackageMetadataOnly: async (newGlobalMetadata, masterKey) => {
             UI.updateProgress(50, "Applying new metadata...");
             const { shardsForEditing, currentMasterHeader } = State.getState();
@@ -945,8 +862,6 @@ document.addEventListener('DOMContentLoaded', () => {
                  return [newPackage];
             }
         },
-
-        // Rebuilds the package, applying changes to encryption settings
         _rebuildPackageWithEncryptionChanges: async (newGlobalMetadata, oldPassword, newPassword, masterKey) => {
             const { currentMasterHeader, shardsForEditing } = State.getState();
             const wasEncrypted = !!currentMasterHeader.encryption;
@@ -1004,11 +919,14 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
 
-    //=================================================================================
-    //  APP CONTROLLER & EVENT HANDLER
-    //=================================================================================
+    // =================================================================================
+    // --- APP CONTROLLER & EVENT HANDLER ---
+    // =================================================================================
+    /**
+     * Main application controller. Initializes the app, manages views,
+     * and orchestrates all modules via event handlers.
+     */
     const App = {
-        // Initializes the application
         init() {
             console.log("Nyx Packer App Initializing...");
             App.setupEventListeners();
@@ -1017,8 +935,6 @@ document.addEventListener('DOMContentLoaded', () => {
             UI.updateCreateViewState();
             UI.showToast('Application ready!', 'success');
         },
-
-        // Checks for and loads package shards from URL parameters
         loadShardsFromUrl: async () => {
             const params = new URLSearchParams(window.location.search);
             let shardUrls = [];
@@ -1042,7 +958,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (shardUrls.length === 0) return;
 
             App.switchToView('import');
-            const importToast = UI.showToast(`Starting import of ${shardUrls.length} shard(s)...`, 'info', 0);
+            const importToast = UI.showToast(`Starting import of ${shardUrls.length} shard(s)...`, 'info', 0); // Persistent toast
 
             try {
                 const files = await Promise.all(shardUrls.map(async (url, i) => {
@@ -1071,28 +987,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 history.replaceState(null, '', window.location.pathname);
             }
         },
-
-        // Switches the currently visible view
         switchToView: (viewName) => {
             console.info(`Switching to view: ${viewName}`);
             const { isConfiguring } = State.getState();
             const currentView = document.querySelector(`.${CONFIG.CLASSES.activeView}`);
-            if (currentView?.id === 'edit-view' && isConfiguring && viewName !== 'edit') {
-                 App.returnToCreateView(false); // Don't switch view again
+            if (currentView && currentView.id === 'edit-view' && isConfiguring && viewName !== 'edit') {
+                 App.returnToCreateView(false); // don't switch view again
             }
 
             Object.values(CONFIG.SELECTORS.views).forEach(selector => document.querySelector(selector)?.classList.remove(CONFIG.CLASSES.activeView));
             const viewKey = `${viewName}View`;
             elements[viewKey]?.classList.add(CONFIG.CLASSES.activeView);
             
-            document.querySelectorAll('.switcher-btn').forEach(btn => {
+            const switcherButtons = document.querySelectorAll('.switcher-btn');
+            switcherButtons.forEach(btn => {
                 const isActive = btn.id === `switchTo${viewName.charAt(0).toUpperCase() + viewName.slice(1)}`;
                 btn.classList.toggle(CONFIG.CLASSES.activeBtn, isActive);
-                btn.setAttribute('aria-pressed', String(isActive));
+                btn.setAttribute('aria-pressed', isActive);
             });
         },
-
-        // Recursively traverses a dropped file system entry (file or directory)
         traverseFileTree: async (entry) => {
             const files = [];
             const processEntry = async (e) => {
@@ -1111,8 +1024,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (entry) await processEntry(entry);
             return files;
         },
-
-        // Creates and downloads a ZIP archive from a list of file entries
         createZipFromEntries: async (fileEntries, zipName) => {
             if (State.getState().isProcessing) return;
             State.setProcessing(true);
@@ -1132,8 +1043,8 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (e) { UI.showToast(`Failed to create zip: ${e.message}`, 'error'); console.error(e); }
             finally { State.setProcessing(false); }
         },
-
-        // Handles the 'Create Package' button click
+        
+        // --- Event Handler Logic ---
         handleCreate: async () => {
             const { files, pendingMetadata } = State.getState();
             if (files.length === 0) return UI.showToast('Please add at least one file', 'warning');
@@ -1164,8 +1075,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 setTimeout(() => UI.toggleProgress(false), 1000);
             }
         },
-
-        // Handles the import of one or more .nyx files
         handleImport: async (packageFiles) => {
             if (!packageFiles || packageFiles.length === 0) return;
             elements.pkgInfo.innerHTML = '';
@@ -1200,8 +1109,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 importToast?.remove();
             }
         },
-
-        // Handles the 'Unlock' button click for encrypted packages
         handleUnlockContent: async () => {
             const password = elements.importPasswordInput.value;
             const { currentMasterHeader } = State.getState();
@@ -1235,8 +1142,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.error(e);
             }
         },
-
-        // Handles clicks on file action buttons (preview, save, etc.)
         handleFileAction: async (event, force = false) => {
             const button = event.target.closest('button[data-action]');
             if (!button) return;
@@ -1292,8 +1197,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } catch (e) { UI.showToast(`${action} failed: ${e.message}`, 'error'); console.error(e); }
         },
-
-        // Handles the 'Configure Metadata' button click
         handleConfigureMetadata: () => {
             if (State.getState().files.length === 0) {
                 UI.showToast('Please add files before configuring metadata.', 'warning');
@@ -1314,8 +1217,6 @@ document.addEventListener('DOMContentLoaded', () => {
             
             App.switchToView('edit');
         },
-
-        // Returns from the metadata configuration mode to the main 'Create' view
         returnToCreateView: (switchView = true) => {
             State.mut('isConfiguring', false);
             elements.editZone.parentElement.classList.remove(CONFIG.CLASSES.hidden);
@@ -1324,8 +1225,6 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.saveChanges.innerHTML = `<span aria-hidden="true">💾</span> Save Changes`;
             if (switchView) App.switchToView('create');
         },
-
-        // Handles loading a package into the 'Edit' view
         handleEditorLoad: async (packageFiles) => {
             if (!packageFiles || packageFiles.length === 0) return;
             Editor.clear();
@@ -1343,8 +1242,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 UI.showToast(`Loaded "${masterHeader.packageName || 'package'}" for editing.`, 'success');
             } catch (e) { UI.showToast(`Failed to load package: ${e.message}`, 'error'); console.error(e); Editor.clear(); }
         },
-
-        // Handles the 'Verify' button click for the master key in the 'Edit' view
         handleVerifyEditorKey: async () => {
             const key = elements.masterKey.value;
             const { currentMasterHeader } = State.getState();
@@ -1360,8 +1257,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } else { UI.showToast('Incorrect master key.', 'error'); }
         },
-
-        // Handles the 'Save Changes' button click in the 'Edit' view
         handleSaveChanges: async () => {
             const { isConfiguring, isEditorUnlocked } = State.getState();
             if (isConfiguring) {
@@ -1399,8 +1294,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 setTimeout(() => UI.toggleProgress(false), 1500);
             }
         },
-
-        // Handles the 'Generate Link' button click in the 'Share' view
         handleGenerateShareLink: async () => {
             const urls = elements.shareUrls.value.split('\n').map(u => u.trim()).filter(Boolean);
             if (urls.length === 0) return UI.showToast('Please enter at least one URL.', 'warning');
@@ -1424,7 +1317,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         },
 
-        // Attaches all necessary event listeners
+        // --- Setup Methods ---
         setupEventListeners: () => {
             App._setupViewSwitching();
             App._setupCreateViewEvents();
@@ -1433,14 +1326,12 @@ document.addEventListener('DOMContentLoaded', () => {
             App._setupShareViewEvents();
             App._setupGlobalEvents();
         },
-
         _setupViewSwitching: () => {
             elements.switchToCreate.addEventListener('click', () => App.switchToView('create'));
             elements.switchToImport.addEventListener('click', () => App.switchToView('import'));
             elements.switchToEdit.addEventListener('click', () => App.switchToView('edit'));
             elements.switchToShare.addEventListener('click', () => App.switchToView('share'));
         },
-
         _setupCreateViewEvents: () => {
             elements.uploadZone.addEventListener('click', () => elements.fileInput.click());
             elements.fileInput.addEventListener('change', e => { State.addFiles([...e.target.files].map(f => ({ file: f, fullPath: f.name }))); e.target.value = ''; });
@@ -1449,22 +1340,18 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.copyKey.addEventListener('click', () => { navigator.clipboard.writeText(elements.masterKeyOutput.value); UI.showToast('Master key copied!', 'success'); });
             elements.splitSize.addEventListener('input', UI.updateCreateViewState);
             elements.configureMetadata.addEventListener('click', App.handleConfigureMetadata);
-            
-            // Use event delegation for file list actions
             elements.fileList.addEventListener('click', async (e) => {
                 const button = e.target.closest('button[data-action]');
                 if (!button) return;
                 const { action, index } = button.dataset;
-                const fileIndex = parseInt(index, 10);
-
                 if (action === 'remove') {
                     const { files } = State.getState();
-                    const [removed] = files.splice(fileIndex, 1);
+                    const [removed] = files.splice(parseInt(index, 10), 1);
                     document.querySelector('.inline-preview-container')?.remove();
                     State.setFiles(files);
                     UI.showToast(`Removed "${removed.fullPath}"`, 'success');
                 } else if (action === 'preview') {
-                    const fileObject = State.getState().files[fileIndex];
+                    const fileObject = State.getState().files[parseInt(index, 10)];
                     if (!fileObject) return;
                     const fileItem = button.closest('.file-item');
                     const existingPreview = fileItem.nextElementSibling;
@@ -1477,14 +1364,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         },
-
         _setupImportViewEvents: () => {
             elements.importZone.addEventListener('click', () => elements.importInput.click());
             elements.importInput.addEventListener('change', e => { App.switchToView('import'); App.handleImport(e.target.files); e.target.value = ''; });
             elements.pkgInfo.addEventListener('click', App.handleFileAction);
             elements.unlockContent.addEventListener('click', App.handleUnlockContent);
         },
-
         _setupEditViewEvents: () => {
             elements.editZone.addEventListener('click', () => elements.editInput.click());
             elements.editInput.addEventListener('change', e => {
@@ -1495,23 +1380,19 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.clearEdit.addEventListener('click', Editor.clear);
             elements.verifyKey.addEventListener('click', App.handleVerifyEditorKey);
         },
-
         _setupShareViewEvents: () => {
             elements.generateShareLink.addEventListener('click', App.handleGenerateShareLink);
             elements.copyShareLink.addEventListener('click', () => { navigator.clipboard.writeText(elements.shareLinkOutput.value); UI.showToast('Share link copied!', 'success'); });
         },
-
         _setupGlobalEvents: () => {
             const autoGrowTextareas = [elements.pkgDescription, elements.pkgCustomData, elements.shareUrls];
             autoGrowTextareas.forEach(textarea => {
                 if (!textarea) return;
                 const adjustHeight = () => { textarea.style.height = 'auto'; textarea.style.height = `${textarea.scrollHeight}px`; };
                 textarea.addEventListener('input', adjustHeight);
-                new ResizeObserver(adjustHeight).observe(textarea);
+                new ResizeObserver(adjustHeight).observe(textarea); // Handles initial render and other changes
             });
         },
-
-        // Sets up drag and drop functionality for all relevant zones
         setupDragAndDrop: () => {
             const setupZone = (zone, onDrop) => {
                 if (!zone) return;
@@ -1537,6 +1418,6 @@ document.addEventListener('DOMContentLoaded', () => {
         },
     };
 
-    // INITIALIZE THE APP
+    // --- GO ---
     App.init();
 });

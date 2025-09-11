@@ -104,11 +104,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.error("Error generating share link:", e);
             }
         },
-
-        // Sets up event listeners for the 'Share' view
-        _setupShareViewEvents: () => {
-            elements.generateShareLink.addEventListener('click', App.handleGenerateShareLink);
-            elements.copyShareLink.addEventListener('click', () => { navigator.clipboard.writeText(elements.shareLinkOutput.value); UI.showToast('Share link copied!', 'success'); });
-        },
     });
+
+    // Encapsulated setup function for this view
+    function setupShareViewEventListeners() {
+        elements.generateShareLink.addEventListener('click', App.handleGenerateShareLink);
+        elements.copyShareLink.addEventListener('click', () => { navigator.clipboard.writeText(elements.shareLinkOutput.value); UI.showToast('Share link copied!', 'success'); });
+    }
+    
+    // Initialize this view
+    setupShareViewEventListeners();
 });

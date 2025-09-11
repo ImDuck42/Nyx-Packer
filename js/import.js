@@ -313,13 +313,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } catch (e) { UI.showToast(`${action} failed: ${e.message}`, 'error'); console.error(e); }
         },
-        
-        // Sets up event listeners for the 'Import' view
-        _setupImportViewEvents: () => {
-            elements.importZone.addEventListener('click', () => elements.importInput.click());
-            elements.importInput.addEventListener('change', e => { App.switchToView('import'); App.handleImport(e.target.files); e.target.value = ''; });
-            elements.pkgInfo.addEventListener('click', App.handleFileAction);
-            elements.unlockContent.addEventListener('click', App.handleUnlockContent);
-        },
     });
+
+    // Encapsulated setup function for this view
+    function setupImportViewEventListeners() {
+        elements.importZone.addEventListener('click', () => elements.importInput.click());
+        elements.importInput.addEventListener('change', e => { App.switchToView('import'); App.handleImport(e.target.files); e.target.value = ''; });
+        elements.pkgInfo.addEventListener('click', App.handleFileAction);
+        elements.unlockContent.addEventListener('click', App.handleUnlockContent);
+    }
+
+    // Initialize this view
+    setupImportViewEventListeners();
 });

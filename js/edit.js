@@ -51,6 +51,10 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.editKeyVerification.classList.add(CONFIG.CLASSES.hidden);
             elements.editDownload.innerHTML = '';
             if (elements.editInput) elements.editInput.value = '';
+            
+            // --- FIX 1: Clear the master key input on reset ---
+            if (elements.masterKey) elements.masterKey.value = '';
+            
             UI.showToast('Editor cleared.', 'info');
         },
 
@@ -168,34 +172,64 @@ document.addEventListener('DOMContentLoaded', () => {
             Editor.clear();
             try {
                 const loadedShards = await Promise.all([...packageFiles].map(Importer.readPackageHeader));
-                const { masterHeader, sortedShards } = Importer.processHeaders(loadedShards);
-                State.mut('shardsForEditing', sortedShards);
-                State.mut('currentMasterHeader', masterHeader);
+                
+                // --- FIX 2: Store raw shards without processing them yet. ---
+                State.mut('shardsForEditing', loadedShards); 
+                // We don't create the masterHeader yet, as we need to verify first.
+                // We'll use the first shard's header just to check for a keyHash.
+                const firstHeader = loadedShards[0].header;
+                
                 elements.editForm.classList.remove(CONFIG.CLASSES.hidden);
-                if (masterHeader.keyHash) {
+
+                if (firstHeader.keyHash) {
                     elements.editKeyVerification.classList.remove(CONFIG.CLASSES.hidden);
                     elements.editForm.dataset.locked = "true";
                     State.mut('isEditorUnlocked', false);
-                } else { Editor.unlockForm(masterHeader); }
-                UI.showToast(`Loaded "${masterHeader.packageName || 'package'}" for editing.`, 'success');
+                    UI.showToast(`Loaded ${loadedShards.length} shard(s). Master key required.`, 'success');
+                } else {
+                    // If no key is needed, we can process and unlock immediately.
+                    const { masterHeader, sortedShards } = Importer.processHeaders(loadedShards);
+                    State.mut('currentMasterHeader', masterHeader);
+                    State.mut('shardsForEditing', sortedShards); // Store the sorted shards
+                    Editor.unlockForm(masterHeader);
+                    UI.showToast(`Loaded "${masterHeader.packageName || 'package'}" for editing.`, 'success');
+                }
             } catch (e) { UI.showToast(`Failed to load package: ${e.message}`, 'error'); console.error(e); Editor.clear(); }
         },
 
         // Handles the 'Verify' button click for the master key in the 'Edit' view
         handleVerifyEditorKey: async () => {
             const key = elements.masterKey.value;
-            const { currentMasterHeader } = State.getState();
-            if (!key || !currentMasterHeader?.keyHash) return;
+            const { shardsForEditing } = State.getState(); // Get the unprocessed shards
+            if (!key || shardsForEditing.length === 0) return;
 
-            if (await Utils.computeStringSHA256(key) === currentMasterHeader.keyHash) {
+            const firstHeader = shardsForEditing[0].header;
+            if (!firstHeader.keyHash) return;
+
+            // First, check if the key hash matches
+            if (await Utils.computeStringSHA256(key) === firstHeader.keyHash) {
                 try {
-                    await Utils.verifyHeaderSignature(currentMasterHeader, key);
+                    // --- FIX 2: Verify each shard's header signature individually ---
+                    UI.showToast('Verifying all shards...', 'info');
+                    await Promise.all(shardsForEditing.map(shard => 
+                        Utils.verifyHeaderSignature(shard.header, key)
+                    ));
+
+                    // If all verifications pass, *now* we process the headers
+                    const { masterHeader, sortedShards } = Importer.processHeaders(shardsForEditing);
+                    State.mut('currentMasterHeader', masterHeader);
+                    State.mut('shardsForEditing', sortedShards); // Update state with sorted shards
+                    
                     UI.showToast('Key correct! Unlocking editor.', 'success');
-                    Editor.unlockForm(currentMasterHeader);
+                    Editor.unlockForm(masterHeader);
+
                 } catch (e) {
-                    UI.showToast(`Error: ${e.message}`, 'error'); console.error(e);
+                    UI.showToast(`Error: ${e.message}`, 'error'); 
+                    console.error(e);
                 }
-            } else { UI.showToast('Incorrect master key.', 'error'); }
+            } else { 
+                UI.showToast('Incorrect master key.', 'error'); 
+            }
         },
 
         // Handles the 'Save Changes' button click in the 'Edit' view
@@ -236,17 +270,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 setTimeout(() => UI.toggleProgress(false), 1500);
             }
         },
-        
-        // Sets up event listeners for the 'Edit' view
-        _setupEditViewEvents: () => {
-            elements.editZone.addEventListener('click', () => elements.editInput.click());
-            elements.editInput.addEventListener('change', e => {
-                const files = [...e.target.files]; e.target.value = '';
-                if (files.length > 0) { App.switchToView('edit'); App.handleEditorLoad(files); }
-            });
-            elements.saveChanges.addEventListener('click', App.handleSaveChanges);
-            elements.clearEdit.addEventListener('click', Editor.clear);
-            elements.verifyKey.addEventListener('click', App.handleVerifyEditorKey);
-        },
     });
+
+    // Encapsulated setup function for this view
+    function setupEditViewEventListeners() {
+        elements.editZone.addEventListener('click', () => elements.editInput.click());
+        elements.editInput.addEventListener('change', e => {
+            const files = [...e.target.files]; e.target.value = '';
+            if (files.length > 0) { App.switchToView('edit'); App.handleEditorLoad(files); }
+        });
+        elements.saveChanges.addEventListener('click', App.handleSaveChanges);
+        elements.clearEdit.addEventListener('click', Editor.clear);
+        elements.verifyKey.addEventListener('click', App.handleVerifyEditorKey);
+    }
+
+    // Initialize this view
+    setupEditViewEventListeners();
 });

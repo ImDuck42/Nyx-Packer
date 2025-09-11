@@ -109,43 +109,47 @@ document.addEventListener('DOMContentLoaded', () => {
             
             App.switchToView('edit');
         },
-        
-        // Sets up event listeners for the 'Create' view
-        _setupCreateViewEvents: () => {
-            elements.uploadZone.addEventListener('click', () => elements.fileInput.click());
-            elements.fileInput.addEventListener('change', e => { State.addFiles([...e.target.files].map(f => ({ file: f, fullPath: f.name }))); e.target.value = ''; });
-            elements.create.addEventListener('click', App.handleCreate);
-            elements.clear.addEventListener('click', () => { if (State.getState().files.length > 0) { State.resetCreateView(); UI.showToast('All files cleared', 'success'); } });
-            elements.copyKey.addEventListener('click', () => { navigator.clipboard.writeText(elements.masterKeyOutput.value); UI.showToast('Master key copied!', 'success'); });
-            elements.splitSize.addEventListener('input', UI.updateCreateViewState);
-            elements.configureMetadata.addEventListener('click', App.handleConfigureMetadata);
-            
-            // Use event delegation for file list actions
-            elements.fileList.addEventListener('click', async (e) => {
-                const button = e.target.closest('button[data-action]');
-                if (!button) return;
-                const { action, index } = button.dataset;
-                const fileIndex = parseInt(index, 10);
-
-                if (action === 'remove') {
-                    const { files } = State.getState();
-                    const [removed] = files.splice(fileIndex, 1);
-                    document.querySelector('.inline-preview-container')?.remove();
-                    State.setFiles(files);
-                    UI.showToast(`Removed "${removed.fullPath}"`, 'success');
-                } else if (action === 'preview') {
-                    const fileObject = State.getState().files[fileIndex];
-                    if (!fileObject) return;
-                    const fileItem = button.closest('.file-item');
-                    const existingPreview = fileItem.nextElementSibling;
-                    if (existingPreview?.classList.contains('inline-preview-container')) {
-                        existingPreview.remove();
-                    } else {
-                        document.querySelector('.inline-preview-container')?.remove();
-                        await Importer.displayPreview(fileObject.file, fileObject.file.type, fileItem);
-                    }
-                }
-            });
-        },
     });
+
+    // Encapsulated setup function for this view
+    function setupCreateViewEventListeners() {
+        elements.uploadZone.addEventListener('click', () => elements.fileInput.click());
+        elements.fileInput.addEventListener('change', e => { State.addFiles([...e.target.files].map(f => ({ file: f, fullPath: f.name }))); e.target.value = ''; });
+        elements.create.addEventListener('click', App.handleCreate);
+        elements.clear.addEventListener('click', () => { if (State.getState().files.length > 0) { State.resetCreateView(); UI.showToast('All files cleared', 'success'); } });
+        elements.copyKey.addEventListener('click', () => { navigator.clipboard.writeText(elements.masterKeyOutput.value); UI.showToast('Master key copied!', 'success'); });
+        elements.splitSize.addEventListener('input', UI.updateCreateViewState);
+        elements.configureMetadata.addEventListener('click', App.handleConfigureMetadata);
+        
+        // Use event delegation for file list actions
+        elements.fileList.addEventListener('click', async (e) => {
+            const button = e.target.closest('button[data-action]');
+            if (!button) return;
+            const { action, index } = button.dataset;
+            const fileIndex = parseInt(index, 10);
+
+            if (action === 'remove') {
+                const { files } = State.getState();
+                const [removed] = files.splice(fileIndex, 1);
+                document.querySelector('.inline-preview-container')?.remove();
+                State.setFiles(files);
+                UI.showToast(`Removed "${removed.fullPath}"`, 'success');
+            } else if (action === 'preview') {
+                const fileObject = State.getState().files[fileIndex];
+                if (!fileObject) return;
+                const fileItem = button.closest('.file-item');
+                const existingPreview = fileItem.nextElementSibling;
+                if (existingPreview?.classList.contains('inline-preview-container')) {
+                    existingPreview.remove();
+                } else {
+                    document.querySelector('.inline-preview-container')?.remove();
+                    await Importer.displayPreview(fileObject.file, fileObject.file.type, fileItem);
+                }
+            }
+        });
+    }
+
+    // Initialize this view
+    setupCreateViewEventListeners();
+    UI.updateCreateViewState();
 });

@@ -101,20 +101,22 @@ document.addEventListener('DOMContentLoaded', () => {
             setProcessing: (isProcessing) => {
                 if (typeof isProcessing !== 'boolean') return;
                 _state.isProcessing = isProcessing;
-                UI.updateCreateViewState();
+                if (window.UI && UI.updateCreateViewState) UI.updateCreateViewState();
             },
 
             setFiles: (files) => {
                 _state.files = files;
-                UI.updateCreateViewState();
+                if (window.UI && UI.updateCreateViewState) UI.updateCreateViewState();
             },
 
             resetCreateView: () => {
                 _state.files = [];
                 _state.pendingMetadata = null;
-                UI.updateCreateViewState();
-                UI.clearDownloadArea();
-                UI.hideMasterKey();
+                if (window.UI && UI.updateCreateViewState) {
+                    UI.updateCreateViewState();
+                    UI.clearDownloadArea();
+                    UI.hideMasterKey();
+                }
             },
 
             addFiles: (newFileObjects) => {
@@ -128,7 +130,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (validFiles.length > 0) {
                     _state.files.push(...validFiles);
                     UI.showToast(`Added ${validFiles.length} file${validFiles.length === 1 ? '' : 's'}`, 'success');
-                    UI.updateCreateViewState();
+                    if (window.UI && UI.updateCreateViewState) UI.updateCreateViewState();
                 }
             },
 
@@ -562,11 +564,28 @@ document.addEventListener('DOMContentLoaded', () => {
         // Initializes the application
         init() {
             console.log("Nyx Packer App Initializing...");
-            App.setupEventListeners();
-            App.setupDragAndDrop();
-            App.loadShardsFromUrl();
-            UI.updateCreateViewState();
+            this.setupGlobalEventListeners();
+            this.setupDragAndDrop();
+            this.loadShardsFromUrl();
             UI.showToast('Application ready!', 'success');
+        },
+
+        // Sets up event listeners that are not view-specific
+        setupGlobalEventListeners: () => {
+            // View switcher buttons
+            elements.switchToCreate.addEventListener('click', () => App.switchToView('create'));
+            elements.switchToImport.addEventListener('click', () => App.switchToView('import'));
+            elements.switchToEdit.addEventListener('click', () => App.switchToView('edit'));
+            elements.switchToShare.addEventListener('click', () => App.switchToView('share'));
+
+            // Textarea auto-grow functionality
+            const autoGrowTextareas = [elements.pkgDescription, elements.pkgCustomData, elements.shareUrls];
+            autoGrowTextareas.forEach(textarea => {
+                if (!textarea) return;
+                const adjustHeight = () => { textarea.style.height = 'auto'; textarea.style.height = `${textarea.scrollHeight}px`; };
+                textarea.addEventListener('input', adjustHeight);
+                new ResizeObserver(adjustHeight).observe(textarea);
+            });
         },
 
         // Checks for and loads package shards from URL parameters
@@ -682,33 +701,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 Utils.downloadBlob(zipBlob, zipName);
             } catch (e) { UI.showToast(`Failed to create zip: ${e.message}`, 'error'); console.error(e); }
             finally { State.setProcessing(false); }
-        },
-
-        // Attaches all necessary event listeners
-        setupEventListeners: () => {
-            App._setupViewSwitching();
-            App._setupCreateViewEvents();
-            App._setupImportViewEvents();
-            App._setupEditViewEvents();
-            App._setupShareViewEvents();
-            App._setupGlobalEvents();
-        },
-        
-        _setupViewSwitching: () => {
-            elements.switchToCreate.addEventListener('click', () => App.switchToView('create'));
-            elements.switchToImport.addEventListener('click', () => App.switchToView('import'));
-            elements.switchToEdit.addEventListener('click', () => App.switchToView('edit'));
-            elements.switchToShare.addEventListener('click', () => App.switchToView('share'));
-        },
-        
-        _setupGlobalEvents: () => {
-            const autoGrowTextareas = [elements.pkgDescription, elements.pkgCustomData, elements.shareUrls];
-            autoGrowTextareas.forEach(textarea => {
-                if (!textarea) return;
-                const adjustHeight = () => { textarea.style.height = 'auto'; textarea.style.height = `${textarea.scrollHeight}px`; };
-                textarea.addEventListener('input', adjustHeight);
-                new ResizeObserver(adjustHeight).observe(textarea);
-            });
         },
 
         // Sets up drag and drop functionality for all relevant zones

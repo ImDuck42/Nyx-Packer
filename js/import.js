@@ -1,7 +1,9 @@
 document.addEventListener('DOMContentLoaded', () => {
     'use strict';
-    
-    // Extend the Importer module with UI and preview functions
+
+    //=================================================================================
+    //  IMPORTER MODULE
+    //=================================================================================
     Object.assign(Importer, {
         // Renders the package metadata and summary information
         displayPackageInfo: (header, totalSize) => {
@@ -48,6 +50,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>`;
             
             elements.pkgInfo.appendChild(summary);
+            
+            if (header.encryption) {
+                elements.pkgInfo.appendChild(elements.importPasswordPrompt);
+                elements.importPasswordPrompt.classList.remove(CONFIG.CLASSES.hidden);
+                UI.showToast('Package is encrypted. Enter password to access files.', 'info');
+            }
             
             if(header.customData) elements.customDataContent.textContent = JSON.stringify(header.customData, null, 2);
         },
@@ -207,11 +215,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 Importer.displayPackageInfo(masterHeader, totalSize);
                 Importer.createFileActionsList(masterHeader.files);
                 
-                if (masterHeader.encryption) {
-                    elements.pkgInfo.after(elements.importPasswordPrompt);
-                    elements.importPasswordPrompt.classList.remove(CONFIG.CLASSES.hidden);
-                    UI.showToast('Package is encrypted. Enter password to access files.', 'info');
-                }
+                // --- CHANGE: The logic that was here has been moved to displayPackageInfo ---
                 
                 UI.showToast(`Package loaded: ${masterHeader.files.length} files`, 'success');
             } catch (e) {

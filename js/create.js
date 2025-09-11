@@ -1,7 +1,9 @@
 document.addEventListener('DOMContentLoaded', () => {
     'use strict';
 
-    // Extend the UI module with create-specific functions
+    //=================================================================================
+    //  CREATOR MODULE
+    //=================================================================================
     Object.assign(UI, {
         // Renders the list of files staged for creation
         renderFileList: () => {

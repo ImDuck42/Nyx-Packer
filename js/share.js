@@ -2,7 +2,7 @@ document.addEventListener('DOMContentLoaded', () => {
     'use strict';
     
     //=================================================================================
-    //  SHARE UTILITY MODULE
+    //  SHARE MODULE
     //=================================================================================
     const ShareUtils = {
         _b64ToUrlSafe: b64 => b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
